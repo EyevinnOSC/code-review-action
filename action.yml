@@ -1,4 +1,4 @@
-name: 'AI Code Reviewer'
+name: 'OSC AI Code Reviewer'
 description: 'Based on open web service in Eyevinn OSC perform a code review of a GitHub repo'
 author: 'Eyevinn Open Source Cloud'
 
