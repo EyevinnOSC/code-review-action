@@ -3195,6 +3195,7430 @@ function copyFile(srcFile, destFile, force) {
 
 /***/ }),
 
+/***/ 828:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.removeSubscription = exports.listSubscriptions = void 0;
+const fetch_1 = __nccwpck_require__(399);
+async function listSubscriptions(context) {
+    const serviceUrl = new URL(`https://catalog.svc.${context.getEnvironment()}.osaas.io/mysubscriptions`);
+    return await (0, fetch_1.createFetch)(serviceUrl, {
+        method: 'GET',
+        headers: {
+            'x-pat-jwt': `Bearer ${context.getPersonalAccessToken()}`,
+            'Content-Type': 'application/json'
+        }
+    });
+}
+exports.listSubscriptions = listSubscriptions;
+async function removeSubscription(context, serviceId) {
+    const serviceUrl = new URL(`https://catalog.svc.${context.getEnvironment()}.osaas.io/mysubscriptions/${serviceId}`);
+    await (0, fetch_1.createFetch)(serviceUrl, {
+        method: 'DELETE',
+        body: JSON.stringify({ services: [serviceId] }),
+        headers: {
+            'x-pat-jwt': `Bearer ${context.getPersonalAccessToken()}`,
+            'Content-Type': 'application/json'
+        }
+    });
+}
+exports.removeSubscription = removeSubscription;
+//# sourceMappingURL=admin.js.map
+
+/***/ }),
+
+/***/ 5968:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Context = void 0;
+const fetch_1 = __nccwpck_require__(399);
+class Context {
+    personalAccessToken;
+    environment;
+    constructor(config) {
+        if (!config?.personalAccessToken && !process.env.OSC_ACCESS_TOKEN) {
+            throw new Error('Personal access token is required to create a context. Please provide it in the config or set the OSC_ACCESS_TOKEN environment variable.');
+        }
+        this.personalAccessToken = config?.personalAccessToken
+            ? config.personalAccessToken
+            : process.env.OSC_ACCESS_TOKEN;
+        this.environment = config?.environment ? config.environment : 'prod';
+    }
+    getPersonalAccessToken() {
+        return this.personalAccessToken;
+    }
+    getEnvironment() {
+        return this.environment;
+    }
+    async getServiceAccessToken(serviceId) {
+        const serviceUrl = new URL(`https://catalog.svc.${this.environment}.osaas.io/mysubscriptions`);
+        const services = await (0, fetch_1.createFetch)(serviceUrl, {
+            method: 'GET',
+            headers: {
+                'x-pat-jwt': `Bearer ${this.personalAccessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        const service = services.find((svc) => svc.serviceId === serviceId);
+        if (!service) {
+            await this.activateService(serviceId);
+        }
+        const satUrl = new URL(`https://token.svc.${this.environment}.osaas.io/servicetoken`);
+        const serviceAccessToken = await (0, fetch_1.createFetch)(satUrl, {
+            method: 'POST',
+            body: JSON.stringify({ serviceId }),
+            headers: {
+                'x-pat-jwt': `Bearer ${this.personalAccessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        return serviceAccessToken.token;
+    }
+    async activateService(serviceId) {
+        const serviceUrl = new URL(`https://catalog.svc.${this.environment}.osaas.io/mysubscriptions`);
+        await (0, fetch_1.createFetch)(serviceUrl, {
+            method: 'POST',
+            body: JSON.stringify({ services: [serviceId] }),
+            headers: {
+                'x-pat-jwt': `Bearer ${this.personalAccessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+    }
+    async refreshServiceAccessToken(serviceId) {
+        return await this.getServiceAccessToken(serviceId);
+    }
+}
+exports.Context = Context;
+//# sourceMappingURL=context.js.map
+
+/***/ }),
+
+/***/ 7284:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.waitForInstanceReady = exports.valueOrSecret = exports.instanceValue = exports.getInstanceHealth = exports.getLogsForInstance = exports.getPortsForInstance = exports.listInstances = exports.getInstance = exports.removeInstance = exports.createInstance = exports.isValidInstanceName = exports.getService = void 0;
+const errors_1 = __nccwpck_require__(5460);
+const fetch_1 = __nccwpck_require__(399);
+const log_1 = __nccwpck_require__(3901);
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+async function getService(context, serviceId) {
+    const serviceUrl = new URL(`https://catalog.svc.${context.getEnvironment()}.osaas.io/mysubscriptions`);
+    const services = await (0, fetch_1.createFetch)(serviceUrl, {
+        method: 'GET',
+        headers: {
+            'x-pat-jwt': `Bearer ${context.getPersonalAccessToken()}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    const service = services.find((svc) => svc.serviceId === serviceId);
+    if (!service) {
+        throw new Error(`Service ${serviceId} not found in your subscriptions`);
+    }
+    return service;
+}
+exports.getService = getService;
+const isValidInstanceName = (name) => {
+    return /^[a-z0-9]+$/.test(name);
+};
+exports.isValidInstanceName = isValidInstanceName;
+/**
+ * @typedef ServiceInstance
+ * @type object
+ * @property {string} name - Service instance name
+ * @property {string} url - Service instance URL
+ * @property ... - Service specific properties
+ */
+/**
+ * Create a new instance of a service in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} token - Service access token
+ * @param {object} body - Service instance options. The options are service specific
+ * @returns {ServiceInstance} - Service instance
+ * @example
+ * import { Context, createInstance } from '@osaas/client-core';
+ *
+ * const ctx = new Context();
+ * const sat = await ctx.getServiceAccessToken('eyevinn-test-adserver');
+ * const instance = await createInstance(ctx, 'eyevinn-test-adserver', sat, { name: 'my-instance' });
+ * console.log(instance.url);
+ */
+async function createInstance(context, serviceId, token, body) {
+    if (!(0, exports.isValidInstanceName)(body.name)) {
+        throw new errors_1.InvalidName(body.name);
+    }
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl);
+    const instance = await (0, fetch_1.createFetch)(instanceUrl, {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: {
+            'x-jwt': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    return instance;
+}
+exports.createInstance = createInstance;
+/**
+ * Remove an instance of a service in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - The service identifier
+ * @param {string} name - The name of the service instance to remove
+ * @param {string} token - Service access token
+ * @example
+ * import { Context, removeInstance } from '@osaas/client-core';
+ * const ctx = new Context();
+ * const sat = await ctx.getServiceAccessToken('eyevinn-test-adserver');
+ * await removeInstance(ctx, 'eyevinn-test-adserver', 'my-instance', sat);
+ */
+async function removeInstance(context, serviceId, name, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl + '/' + name);
+    await (0, fetch_1.createFetch)(instanceUrl, {
+        method: 'DELETE',
+        headers: {
+            'x-jwt': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+}
+exports.removeInstance = removeInstance;
+/**
+ * Retrieve an instance of a service in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - The service identifier
+ * @param {string} name - The name of the service instance to remove
+ * @param {string} token - Service access token
+ * @returns {ServiceInstance} - Service instance
+ */
+async function getInstance(context, serviceId, name, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl + '/' + name);
+    try {
+        const instance = await (0, fetch_1.createFetch)(instanceUrl, {
+            method: 'GET',
+            headers: {
+                'x-jwt': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        return instance;
+    }
+    catch (err) {
+        (0, log_1.Log)().debug(err);
+        if (err instanceof fetch_1.FetchError && err.httpCode === 401) {
+            throw new errors_1.UnauthorizedError();
+        }
+        else if (err instanceof fetch_1.FetchError && err.httpCode === 404) {
+            return undefined;
+        }
+    }
+    return undefined;
+}
+exports.getInstance = getInstance;
+/**
+ * List all instances of a service in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - The service identifier
+ * @param {string} token - Service access token
+ * @returns {Array.<ServiceInstance>} - List of instances
+ */
+async function listInstances(context, serviceId, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl);
+    return await (0, fetch_1.createFetch)(instanceUrl, {
+        method: 'GET',
+        headers: {
+            'x-jwt': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+}
+exports.listInstances = listInstances;
+/**
+ * List all extra TCP ports routed to an instance in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - The service identifier
+ * @param {string} name - The name of the service instance
+ * @param {string} token - Service access token
+ * @returns {Array.<Port>} - List of ports
+ */
+async function getPortsForInstance(context, serviceId, name, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl);
+    const portsUrl = new URL('https://' + instanceUrl.host + '/ports/' + name);
+    return await (0, fetch_1.createFetch)(portsUrl, {
+        method: 'GET',
+        headers: {
+            'x-jwt': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+    });
+}
+exports.getPortsForInstance = getPortsForInstance;
+async function getLogsForInstance(context, serviceId, name, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl);
+    const logsUrl = new URL('https://' + instanceUrl.host + '/logs/' + name);
+    return await (0, fetch_1.createFetch)(logsUrl, {
+        method: 'GET',
+        headers: {
+            'x-jwt': `Bearer ${token}`
+        }
+    });
+}
+exports.getLogsForInstance = getLogsForInstance;
+async function getInstanceHealth(context, serviceId, name, token) {
+    const service = await getService(context, serviceId);
+    const instanceUrl = new URL(service.apiUrl);
+    const healthUrl = new URL('/health/' + name, instanceUrl);
+    const { status } = await (0, fetch_1.createFetch)(healthUrl, {
+        method: 'GET',
+        headers: {
+            'x-jwt': `Bearer ${token}`
+        }
+    });
+    return status;
+}
+exports.getInstanceHealth = getInstanceHealth;
+function instanceValue(instance, key) {
+    return instance[key].match(/^{{secrets}}/) ? '***' : instance[key];
+}
+exports.instanceValue = instanceValue;
+function valueOrSecret(value) {
+    return value.match(/^{{secrets}}/) ? '***' : value;
+}
+exports.valueOrSecret = valueOrSecret;
+async function waitForInstanceReady(serviceId, name, ctx) {
+    const serviceAccessToken = await ctx.getServiceAccessToken(serviceId);
+    let instanceOk = false;
+    while (!instanceOk) {
+        await delay(1000);
+        const status = await getInstanceHealth(ctx, serviceId, name, serviceAccessToken);
+        if (status && status === 'running') {
+            instanceOk = true;
+        }
+    }
+}
+exports.waitForInstanceReady = waitForInstanceReady;
+//# sourceMappingURL=core.js.map
+
+/***/ }),
+
+/***/ 5460:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.InvalidName = exports.UnauthorizedError = exports.TokenExpiredError = void 0;
+class TokenExpiredError extends Error {
+    constructor() {
+        super('Service Access Token expired');
+    }
+}
+exports.TokenExpiredError = TokenExpiredError;
+class UnauthorizedError extends Error {
+    constructor() {
+        super('Unauthorized');
+    }
+}
+exports.UnauthorizedError = UnauthorizedError;
+class InvalidName extends Error {
+    constructor(name) {
+        super(`Invalid name: ${name}. Only alphanumeric characters are allowed.`);
+    }
+}
+exports.InvalidName = InvalidName;
+//# sourceMappingURL=errors.js.map
+
+/***/ }),
+
+/***/ 399:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.FetchError = exports.createFetch = void 0;
+const log_1 = __nccwpck_require__(3901);
+const defaultErrorFactory = async (response) => {
+    if (response.headers.get('content-type')?.includes('application/json')) {
+        const res = await response.json();
+        return new FetchError({
+            message: res?.message ?? res?.reason ?? JSON.stringify(res),
+            httpCode: response.status
+        });
+    }
+    else {
+        const res = await response.text();
+        return new FetchError({
+            message: res,
+            httpCode: response.status
+        });
+    }
+};
+const createFetch = async (url, options, errorFactory = defaultErrorFactory) => {
+    try {
+        (0, log_1.Log)().debug(`${options?.method}: ${url}`);
+        const response = await fetch(url, { ...options });
+        (0, log_1.Log)().debug(response.status + ': ' + response.statusText + ': ' + response.ok);
+        if (!response.ok) {
+            throw await errorFactory(response);
+        }
+        if (response.headers.get('content-type')?.includes('application/json')) {
+            const res = await response.json();
+            return res;
+        }
+        else {
+            const res = await response.text();
+            return res;
+        }
+    }
+    catch (error) {
+        if (error instanceof FetchError) {
+            (0, log_1.Log)().debug(error.httpCode + ': ' + error.message);
+            throw error;
+        }
+        throw new FetchError({ message: getErrorMessage(error) });
+    }
+};
+exports.createFetch = createFetch;
+const getErrorMessage = (error) => {
+    if (error instanceof Error)
+        return error.message;
+    return JSON.stringify(error);
+};
+class FetchError extends Error {
+    httpCode;
+    constructor({ message, httpCode }) {
+        super(message);
+        this.httpCode = httpCode;
+    }
+}
+exports.FetchError = FetchError;
+//# sourceMappingURL=fetch.js.map
+
+/***/ }),
+
+/***/ 1483:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.waitForJobToComplete = exports.listJobs = exports.getJob = exports.removeJob = exports.createJob = exports.removeSubscription = exports.listSubscriptions = exports.waitForInstanceReady = exports.isValidInstanceName = exports.valueOrSecret = exports.instanceValue = exports.getInstanceHealth = exports.getLogsForInstance = exports.getPortsForInstance = exports.listInstances = exports.getInstance = exports.removeInstance = exports.createInstance = exports.Platform = exports.Context = exports.FetchError = exports.createFetch = exports.Log = void 0;
+/** @module @osaas/client-core */
+var log_1 = __nccwpck_require__(3901);
+Object.defineProperty(exports, "Log", ({ enumerable: true, get: function () { return log_1.Log; } }));
+var fetch_1 = __nccwpck_require__(399);
+Object.defineProperty(exports, "createFetch", ({ enumerable: true, get: function () { return fetch_1.createFetch; } }));
+Object.defineProperty(exports, "FetchError", ({ enumerable: true, get: function () { return fetch_1.FetchError; } }));
+var context_1 = __nccwpck_require__(5968);
+Object.defineProperty(exports, "Context", ({ enumerable: true, get: function () { return context_1.Context; } }));
+var platform_1 = __nccwpck_require__(5872);
+Object.defineProperty(exports, "Platform", ({ enumerable: true, get: function () { return platform_1.Platform; } }));
+var core_1 = __nccwpck_require__(7284);
+Object.defineProperty(exports, "createInstance", ({ enumerable: true, get: function () { return core_1.createInstance; } }));
+Object.defineProperty(exports, "removeInstance", ({ enumerable: true, get: function () { return core_1.removeInstance; } }));
+Object.defineProperty(exports, "getInstance", ({ enumerable: true, get: function () { return core_1.getInstance; } }));
+Object.defineProperty(exports, "listInstances", ({ enumerable: true, get: function () { return core_1.listInstances; } }));
+Object.defineProperty(exports, "getPortsForInstance", ({ enumerable: true, get: function () { return core_1.getPortsForInstance; } }));
+Object.defineProperty(exports, "getLogsForInstance", ({ enumerable: true, get: function () { return core_1.getLogsForInstance; } }));
+Object.defineProperty(exports, "getInstanceHealth", ({ enumerable: true, get: function () { return core_1.getInstanceHealth; } }));
+Object.defineProperty(exports, "instanceValue", ({ enumerable: true, get: function () { return core_1.instanceValue; } }));
+Object.defineProperty(exports, "valueOrSecret", ({ enumerable: true, get: function () { return core_1.valueOrSecret; } }));
+Object.defineProperty(exports, "isValidInstanceName", ({ enumerable: true, get: function () { return core_1.isValidInstanceName; } }));
+Object.defineProperty(exports, "waitForInstanceReady", ({ enumerable: true, get: function () { return core_1.waitForInstanceReady; } }));
+var admin_1 = __nccwpck_require__(828);
+Object.defineProperty(exports, "listSubscriptions", ({ enumerable: true, get: function () { return admin_1.listSubscriptions; } }));
+Object.defineProperty(exports, "removeSubscription", ({ enumerable: true, get: function () { return admin_1.removeSubscription; } }));
+var job_1 = __nccwpck_require__(5760);
+Object.defineProperty(exports, "createJob", ({ enumerable: true, get: function () { return job_1.createJob; } }));
+Object.defineProperty(exports, "removeJob", ({ enumerable: true, get: function () { return job_1.removeJob; } }));
+Object.defineProperty(exports, "getJob", ({ enumerable: true, get: function () { return job_1.getJob; } }));
+Object.defineProperty(exports, "listJobs", ({ enumerable: true, get: function () { return job_1.listJobs; } }));
+Object.defineProperty(exports, "waitForJobToComplete", ({ enumerable: true, get: function () { return job_1.waitForJobToComplete; } }));
+__exportStar(__nccwpck_require__(8107), exports);
+__exportStar(__nccwpck_require__(5460), exports);
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 5760:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.waitForJobToComplete = exports.listJobs = exports.getJob = exports.removeJob = exports.createJob = void 0;
+const core_1 = __nccwpck_require__(7284);
+const MAX_ITER = 1000;
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+/**
+ * @typedef ServiceJob
+ * @type object
+ * @property {string} name - Service job name
+ * @property ... - Service specific job properties
+ */
+/**
+ * Create a new service job in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} token - Service access token
+ * @param {object} body - Service job options. The options are service specific
+ * @returns {ServiceJob} - Service job. The job is specific to the service
+ * @example
+ * import { Context, createJob } from '@osaas/client-core';
+ * const serviceAccessToken = await ctx.getServiceAccessToken(
+ *  'eyevinn-docker-retransfer'
+ * );
+ * const job = await createJob(
+ *   ctx,
+ *   'eyevinn-docker-retransfer',
+ *   serviceAccessToken,
+ *   {
+ *     name: 'example',
+ *     awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+ *     awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+ *     cmdLineArgs: 's3://source/myfile.txt s3://dest/'
+ *   }
+ * );
+ */
+async function createJob(context, serviceId, token, body) {
+    const service = await (0, core_1.getService)(context, serviceId);
+    if (service.serviceType !== 'job') {
+        throw new Error('Service is not a job service');
+    }
+    return await (0, core_1.createInstance)(context, serviceId, token, body);
+}
+exports.createJob = createJob;
+/**
+ * Remove a service job in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} name - Name of service job to remove
+ * @param {string} token - Service access token
+ */
+async function removeJob(context, serviceId, name, token) {
+    const service = await (0, core_1.getService)(context, serviceId);
+    if (service.serviceType !== 'job') {
+        throw new Error('Service is not a job service');
+    }
+    return await (0, core_1.removeInstance)(context, serviceId, name, token);
+}
+exports.removeJob = removeJob;
+/**
+ * Get a service job in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} name - Name of service job to read
+ * @param {string} token - Service access token
+ */
+async function getJob(context, serviceId, name, token) {
+    const service = await (0, core_1.getService)(context, serviceId);
+    if (service.serviceType !== 'job') {
+        throw new Error('Service is not a job service');
+    }
+    return await (0, core_1.getInstance)(context, serviceId, name, token);
+}
+exports.getJob = getJob;
+/**
+ * List service jobs in Open Source Cloud
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} token - Service access token
+ */
+async function listJobs(context, serviceId, token) {
+    const service = await (0, core_1.getService)(context, serviceId);
+    if (service.serviceType !== 'job') {
+        throw new Error('Service is not a job service');
+    }
+    return await (0, core_1.listInstances)(context, serviceId, token);
+}
+exports.listJobs = listJobs;
+/**
+ * Wait for a service job to complete
+ * @memberof module:@osaas/client-core
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} serviceId - Service identifier. The service identifier is {github-organization}-{github-repo}
+ * @param {string} name - Name of service job to wait for
+ * @param {string} token - Service access token
+ */
+async function waitForJobToComplete(context, serviceId, name, token) {
+    for (const _ of Array(MAX_ITER)) {
+        const job = await getJob(context, serviceId, name, token);
+        if (job.status === 'Complete') {
+            break;
+        }
+        await delay(1000);
+    }
+}
+exports.waitForJobToComplete = waitForJobToComplete;
+//# sourceMappingURL=job.js.map
+
+/***/ }),
+
+/***/ 3901:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Log = exports.Logger = void 0;
+const chalk_1 = __importDefault(__nccwpck_require__(465));
+const util_1 = __importDefault(__nccwpck_require__(9023));
+let logger_;
+const LEVELS = {
+    info: { text: 'info', method: 'info', color: 'white' },
+    error: { text: 'error', method: 'error', color: 'red' },
+    warn: { text: 'warn', method: 'info', color: 'yellow' },
+    debug: { text: 'debug', method: 'info', color: 'blue' },
+    fatal: { text: 'fatal', method: 'error', color: 'redBright' }
+};
+function log(method) {
+    switch (method) {
+        case 'info':
+            return console.info;
+        case 'error':
+            return console.error;
+        default:
+            throw new Error(`Invalid log method ${method}`);
+    }
+}
+function logfmt(levelCode, ...args) {
+    const level = LEVELS[levelCode];
+    if (levelCode == 'debug') {
+        log(level.method)(...args);
+    }
+    else {
+        const msg = util_1.default.format(...args);
+        log(level.method)(chalk_1.default[level.color](msg));
+    }
+}
+class Logger {
+    debugMode = false;
+    constructor() {
+        return this;
+    }
+    info(...args) {
+        logfmt('info', ...args);
+        return this;
+    }
+    warn(...args) {
+        logfmt('warn', ...args);
+        return this;
+    }
+    error(...args) {
+        logfmt('error', ...args);
+        return this;
+    }
+    debug(...args) {
+        if (this.debugMode)
+            logfmt('debug', ...args);
+        return this;
+    }
+    fatal(...args) {
+        logfmt('fatal', ...args);
+        return this;
+    }
+    get level() {
+        return this.debugMode ? 'debug' : 'info';
+    }
+    set level(value) {
+        if (value == 'debug') {
+            this.debugMode = true;
+        }
+        else if (value == 'info') {
+            this.debugMode = false;
+        }
+        else {
+            this.warn('level', value, 'not supported');
+        }
+    }
+}
+exports.Logger = Logger;
+function Log() {
+    if (logger_) {
+        return logger_;
+    }
+    logger_ = new Logger();
+    logger_.level = 'info';
+    if (process.env.DEBUG) {
+        logger_.level = 'debug';
+    }
+    return logger_;
+}
+exports.Log = Log;
+//# sourceMappingURL=log.js.map
+
+/***/ }),
+
+/***/ 5872:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Platform = void 0;
+class Platform {
+    apiKey;
+    environment;
+    constructor(config) {
+        if (!config?.apiKey && !process.env.OSC_API_KEY) {
+            throw new Error('Platform API key is required. Please provide it in the config or set the OSC_API_KEY environment variable.');
+        }
+        this.apiKey = config?.apiKey ? config.apiKey : process.env.OSC_API_KEY;
+        this.environment = config?.environment ? config.environment : 'prod';
+    }
+    getApiKey() {
+        return this.apiKey;
+    }
+    getEnvironment() {
+        return this.environment;
+    }
+}
+exports.Platform = Platform;
+//# sourceMappingURL=platform.js.map
+
+/***/ }),
+
+/***/ 8107:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.remakeOrder = exports.getOrderIdByName = void 0;
+const errors_1 = __nccwpck_require__(5460);
+const fetch_1 = __nccwpck_require__(399);
+const log_1 = __nccwpck_require__(3901);
+async function getOrderIdByName(platform, orderName) {
+    try {
+        const makerUrl = new URL(`https://maker.svc.${platform.getEnvironment()}.osaas.io/maker`);
+        makerUrl.searchParams.append('name', orderName);
+        const res = await (0, fetch_1.createFetch)(makerUrl, {
+            headers: {
+                Authorization: `Bearer ${platform.getApiKey()}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (res[0]) {
+            return res[0].order.orderId;
+        }
+        return undefined;
+    }
+    catch (err) {
+        (0, log_1.Log)().debug(err);
+        if (err instanceof fetch_1.FetchError && err.httpCode === 401) {
+            throw new errors_1.UnauthorizedError();
+        }
+        else if (err instanceof fetch_1.FetchError && err.httpCode === 404) {
+            return undefined;
+        }
+    }
+}
+exports.getOrderIdByName = getOrderIdByName;
+async function remakeOrder(platform, orderId) {
+    try {
+        const remakerUrl = new URL(`https://maker.svc.${platform.getEnvironment()}.osaas.io/remaker`);
+        const res = await (0, fetch_1.createFetch)(remakerUrl, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${platform.getApiKey()}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ orderId })
+        });
+        (0, log_1.Log)().debug(res);
+        return res.orderId;
+    }
+    catch (err) {
+        (0, log_1.Log)().debug(err);
+        if (err instanceof fetch_1.FetchError && err.httpCode === 401) {
+            throw new errors_1.UnauthorizedError();
+        }
+        else if (err instanceof fetch_1.FetchError && err.httpCode === 404) {
+            return undefined;
+        }
+    }
+    return undefined;
+}
+exports.remakeOrder = remakeOrder;
+//# sourceMappingURL=maker.js.map
+
+/***/ }),
+
+/***/ 5489:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAlexbj7590stvInstance = exports.removeAlexbj7590stvInstance = exports.createAlexbj7590stvInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new 90stv instance
+ *
+ * @description Experience nostalgia with 90stv! Transform your FAST channels into a classic 90s TV viewing adventure, effortlessly with a quick Docker setup. Relive the golden era of television today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {Alexbj7590stvConfig}} body - Service instance configuration
+ * @returns {Alexbj7590stv} - Service instance
+ * @example
+ * import { Context, createAlexbj7590stvInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createAlexbj7590stvInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createAlexbj7590stvInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-90stv');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'alexbj75-90stv', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('alexbj75-90stv', instance.name, ctx);
+    return instance;
+}
+exports.createAlexbj7590stvInstance = createAlexbj7590stvInstance;
+/**
+ * Remove a 90stv instance
+ *
+ * @description Experience nostalgia with 90stv! Transform your FAST channels into a classic 90s TV viewing adventure, effortlessly with a quick Docker setup. Relive the golden era of television today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the 90stv to be removed
+ */
+async function removeAlexbj7590stvInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-90stv');
+    await (0, client_core_1.removeInstance)(ctx, 'alexbj75-90stv', name, serviceAccessToken);
+}
+exports.removeAlexbj7590stvInstance = removeAlexbj7590stvInstance;
+/**
+ * Get a 90stv instance
+ *
+ * @description Experience nostalgia with 90stv! Transform your FAST channels into a classic 90s TV viewing adventure, effortlessly with a quick Docker setup. Relive the golden era of television today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the 90stv to be retrieved
+ * @returns {Alexbj7590stv} - Service instance
+ */
+async function getAlexbj7590stvInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-90stv');
+    return await (0, client_core_1.getInstance)(ctx, 'alexbj75-90stv', name, serviceAccessToken);
+}
+exports.getAlexbj7590stvInstance = getAlexbj7590stvInstance;
+//# sourceMappingURL=alexbj75-90stv.js.map
+
+/***/ }),
+
+/***/ 9075:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAlexbj75MovierecommendatorInstance = exports.removeAlexbj75MovierecommendatorInstance = exports.createAlexbj75MovierecommendatorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new movierecommendator instance
+ *
+ * @description Discover new films effortlessly! Enter a movie name and get two personalized recommendations powered by OpenAI. Transform your movie nights with Movie Recommender’s smart suggestions. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {Alexbj75MovierecommendatorConfig}} body - Service instance configuration
+ * @returns {Alexbj75Movierecommendator} - Service instance
+ * @example
+ * import { Context, createAlexbj75MovierecommendatorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createAlexbj75MovierecommendatorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createAlexbj75MovierecommendatorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-movierecommendator');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'alexbj75-movierecommendator', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('alexbj75-movierecommendator', instance.name, ctx);
+    return instance;
+}
+exports.createAlexbj75MovierecommendatorInstance = createAlexbj75MovierecommendatorInstance;
+/**
+ * Remove a movierecommendator instance
+ *
+ * @description Discover new films effortlessly! Enter a movie name and get two personalized recommendations powered by OpenAI. Transform your movie nights with Movie Recommender’s smart suggestions. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the movierecommendator to be removed
+ */
+async function removeAlexbj75MovierecommendatorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-movierecommendator');
+    await (0, client_core_1.removeInstance)(ctx, 'alexbj75-movierecommendator', name, serviceAccessToken);
+}
+exports.removeAlexbj75MovierecommendatorInstance = removeAlexbj75MovierecommendatorInstance;
+/**
+ * Get a movierecommendator instance
+ *
+ * @description Discover new films effortlessly! Enter a movie name and get two personalized recommendations powered by OpenAI. Transform your movie nights with Movie Recommender’s smart suggestions. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the movierecommendator to be retrieved
+ * @returns {Alexbj75Movierecommendator} - Service instance
+ */
+async function getAlexbj75MovierecommendatorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('alexbj75-movierecommendator');
+    return await (0, client_core_1.getInstance)(ctx, 'alexbj75-movierecommendator', name, serviceAccessToken);
+}
+exports.getAlexbj75MovierecommendatorInstance = getAlexbj75MovierecommendatorInstance;
+//# sourceMappingURL=alexbj75-movierecommendator.js.map
+
+/***/ }),
+
+/***/ 5880:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAndersnasNodecatInstance = exports.removeAndersnasNodecatInstance = exports.createAndersnasNodecatInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new NodeCat instance
+ *
+ * @description Enhance your app's security with NodeCat, a robust solution for generating and validating Common Access Tokens in a NodeJS environment. Ideal for developers needing reliable token management.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {AndersnasNodecatConfig}} body - Service instance configuration
+ * @returns {AndersnasNodecat} - Service instance
+ * @example
+ * import { Context, createAndersnasNodecatInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createAndersnasNodecatInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createAndersnasNodecatInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('andersnas-nodecat');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'andersnas-nodecat', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('andersnas-nodecat', instance.name, ctx);
+    return instance;
+}
+exports.createAndersnasNodecatInstance = createAndersnasNodecatInstance;
+/**
+ * Remove a NodeCat instance
+ *
+ * @description Enhance your app's security with NodeCat, a robust solution for generating and validating Common Access Tokens in a NodeJS environment. Ideal for developers needing reliable token management.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the nodecat to be removed
+ */
+async function removeAndersnasNodecatInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('andersnas-nodecat');
+    await (0, client_core_1.removeInstance)(ctx, 'andersnas-nodecat', name, serviceAccessToken);
+}
+exports.removeAndersnasNodecatInstance = removeAndersnasNodecatInstance;
+/**
+ * Get a NodeCat instance
+ *
+ * @description Enhance your app's security with NodeCat, a robust solution for generating and validating Common Access Tokens in a NodeJS environment. Ideal for developers needing reliable token management.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the nodecat to be retrieved
+ * @returns {AndersnasNodecat} - Service instance
+ */
+async function getAndersnasNodecatInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('andersnas-nodecat');
+    return await (0, client_core_1.getInstance)(ctx, 'andersnas-nodecat', name, serviceAccessToken);
+}
+exports.getAndersnasNodecatInstance = getAndersnasNodecatInstance;
+//# sourceMappingURL=andersnas-nodecat.js.map
+
+/***/ }),
+
+/***/ 9554:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAnderswassenChaosproxyConfigInstance = exports.removeAnderswassenChaosproxyConfigInstance = exports.createAnderswassenChaosproxyConfigInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Chaos Stream Proxy Configurator instance
+ *
+ * @description Revolutionize your streaming experience with the Chaos Stream Proxy Configurator! Customize HLS streams with precision-timed delays for enhanced content manipulation and control effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {AnderswassenChaosproxyConfigConfig}} body - Service instance configuration
+ * @returns {AnderswassenChaosproxyConfig} - Service instance
+ * @example
+ * import { Context, createAnderswassenChaosproxyConfigInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createAnderswassenChaosproxyConfigInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createAnderswassenChaosproxyConfigInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('anderswassen-chaosproxy-config');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'anderswassen-chaosproxy-config', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('anderswassen-chaosproxy-config', instance.name, ctx);
+    return instance;
+}
+exports.createAnderswassenChaosproxyConfigInstance = createAnderswassenChaosproxyConfigInstance;
+/**
+ * Remove a Chaos Stream Proxy Configurator instance
+ *
+ * @description Revolutionize your streaming experience with the Chaos Stream Proxy Configurator! Customize HLS streams with precision-timed delays for enhanced content manipulation and control effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the configurator to be removed
+ */
+async function removeAnderswassenChaosproxyConfigInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('anderswassen-chaosproxy-config');
+    await (0, client_core_1.removeInstance)(ctx, 'anderswassen-chaosproxy-config', name, serviceAccessToken);
+}
+exports.removeAnderswassenChaosproxyConfigInstance = removeAnderswassenChaosproxyConfigInstance;
+/**
+ * Get a Chaos Stream Proxy Configurator instance
+ *
+ * @description Revolutionize your streaming experience with the Chaos Stream Proxy Configurator! Customize HLS streams with precision-timed delays for enhanced content manipulation and control effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the configurator to be retrieved
+ * @returns {AnderswassenChaosproxyConfig} - Service instance
+ */
+async function getAnderswassenChaosproxyConfigInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('anderswassen-chaosproxy-config');
+    return await (0, client_core_1.getInstance)(ctx, 'anderswassen-chaosproxy-config', name, serviceAccessToken);
+}
+exports.getAnderswassenChaosproxyConfigInstance = getAnderswassenChaosproxyConfigInstance;
+//# sourceMappingURL=anderswassen-chaosproxy-config.js.map
+
+/***/ }),
+
+/***/ 9563:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getApacheCouchdbInstance = exports.removeApacheCouchdbInstance = exports.createApacheCouchdbInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Couch DB instance
+ *
+ * @description Unlock seamless data management with Apache CouchDB! Effortlessly scalable and highly available, CouchDB makes storing, retrieving, and syncing data across devices a breeze. Ideal for modern cloud apps!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ApacheCouchdbConfig}} body - Service instance configuration
+ * @returns {ApacheCouchdb} - Service instance
+ * @example
+ * import { Context, createApacheCouchdbInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createApacheCouchdbInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createApacheCouchdbInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('apache-couchdb');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'apache-couchdb', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('apache-couchdb', instance.name, ctx);
+    return instance;
+}
+exports.createApacheCouchdbInstance = createApacheCouchdbInstance;
+/**
+ * Remove a Couch DB instance
+ *
+ * @description Unlock seamless data management with Apache CouchDB! Effortlessly scalable and highly available, CouchDB makes storing, retrieving, and syncing data across devices a breeze. Ideal for modern cloud apps!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the couchdb to be removed
+ */
+async function removeApacheCouchdbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('apache-couchdb');
+    await (0, client_core_1.removeInstance)(ctx, 'apache-couchdb', name, serviceAccessToken);
+}
+exports.removeApacheCouchdbInstance = removeApacheCouchdbInstance;
+/**
+ * Get a Couch DB instance
+ *
+ * @description Unlock seamless data management with Apache CouchDB! Effortlessly scalable and highly available, CouchDB makes storing, retrieving, and syncing data across devices a breeze. Ideal for modern cloud apps!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the couchdb to be retrieved
+ * @returns {ApacheCouchdb} - Service instance
+ */
+async function getApacheCouchdbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('apache-couchdb');
+    return await (0, client_core_1.getInstance)(ctx, 'apache-couchdb', name, serviceAccessToken);
+}
+exports.getApacheCouchdbInstance = getApacheCouchdbInstance;
+//# sourceMappingURL=apache-couchdb.js.map
+
+/***/ }),
+
+/***/ 1565:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getAtmozSftpInstance = exports.removeAtmozSftpInstance = exports.createAtmozSftpInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new SFTP Server instance
+ *
+ * @description Effortlessly manage secure file transfers with our user-friendly SFTP server powered by OpenSSH. Ideal for sharing files securely using SSH, it integrates easily with Docker, ensuring both security and simplicity.
+
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {AtmozSftpConfig}} body - Service instance configuration
+ * @returns {AtmozSftp} - Service instance
+ * @example
+ * import { Context, createAtmozSftpInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createAtmozSftpInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createAtmozSftpInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('atmoz-sftp');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'atmoz-sftp', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('atmoz-sftp', instance.name, ctx);
+    return instance;
+}
+exports.createAtmozSftpInstance = createAtmozSftpInstance;
+/**
+ * Remove a SFTP Server instance
+ *
+ * @description Effortlessly manage secure file transfers with our user-friendly SFTP server powered by OpenSSH. Ideal for sharing files securely using SSH, it integrates easily with Docker, ensuring both security and simplicity.
+
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the sftp to be removed
+ */
+async function removeAtmozSftpInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('atmoz-sftp');
+    await (0, client_core_1.removeInstance)(ctx, 'atmoz-sftp', name, serviceAccessToken);
+}
+exports.removeAtmozSftpInstance = removeAtmozSftpInstance;
+/**
+ * Get a SFTP Server instance
+ *
+ * @description Effortlessly manage secure file transfers with our user-friendly SFTP server powered by OpenSSH. Ideal for sharing files securely using SSH, it integrates easily with Docker, ensuring both security and simplicity.
+
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the sftp to be retrieved
+ * @returns {AtmozSftp} - Service instance
+ */
+async function getAtmozSftpInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('atmoz-sftp');
+    return await (0, client_core_1.getInstance)(ctx, 'atmoz-sftp', name, serviceAccessToken);
+}
+exports.getAtmozSftpInstance = getAtmozSftpInstance;
+//# sourceMappingURL=atmoz-sftp.js.map
+
+/***/ }),
+
+/***/ 1440:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBbcBraveInstance = exports.removeBbcBraveInstance = exports.createBbcBraveInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Brave instance
+ *
+ * @description Brave is a Basic real-time (remote) audio/video editor. It allows LIVE video (and/or audio) to be received, manipulated, and sent elsewhere. Forwarding RTMP from one place to another, mixing two or more inputs or add basic graphics are some example of usage.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BbcBraveConfig}} body - Service instance configuration
+ * @returns {BbcBrave} - Service instance
+ * @example
+ * import { Context, createBbcBraveInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBbcBraveInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBbcBraveInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bbc-brave');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'bbc-brave', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('bbc-brave', instance.name, ctx);
+    return instance;
+}
+exports.createBbcBraveInstance = createBbcBraveInstance;
+/**
+ * Remove a Brave instance
+ *
+ * @description Brave is a Basic real-time (remote) audio/video editor. It allows LIVE video (and/or audio) to be received, manipulated, and sent elsewhere. Forwarding RTMP from one place to another, mixing two or more inputs or add basic graphics are some example of usage.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mixer to be removed
+ */
+async function removeBbcBraveInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bbc-brave');
+    await (0, client_core_1.removeInstance)(ctx, 'bbc-brave', name, serviceAccessToken);
+}
+exports.removeBbcBraveInstance = removeBbcBraveInstance;
+/**
+ * Get a Brave instance
+ *
+ * @description Brave is a Basic real-time (remote) audio/video editor. It allows LIVE video (and/or audio) to be received, manipulated, and sent elsewhere. Forwarding RTMP from one place to another, mixing two or more inputs or add basic graphics are some example of usage.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mixer to be retrieved
+ * @returns {BbcBrave} - Service instance
+ */
+async function getBbcBraveInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bbc-brave');
+    return await (0, client_core_1.getInstance)(ctx, 'bbc-brave', name, serviceAccessToken);
+}
+exports.getBbcBraveInstance = getBbcBraveInstance;
+//# sourceMappingURL=bbc-brave.js.map
+
+/***/ }),
+
+/***/ 7597:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBirmeCaptchaSvcInstance = exports.removeBirmeCaptchaSvcInstance = exports.createBirmeCaptchaSvcInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Captcha Service instance
+ *
+ * @description Enhance your security effortlessly with our reliable CAPTCHA Service! Easily generate and verify CAPTCHAs to protect against automated attacks. Quick setup, seamless integration, robust solution!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BirmeCaptchaSvcConfig}} body - Service instance configuration
+ * @returns {BirmeCaptchaSvc} - Service instance
+ * @example
+ * import { Context, createBirmeCaptchaSvcInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBirmeCaptchaSvcInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBirmeCaptchaSvcInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-captcha-svc');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'birme-captcha-svc', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('birme-captcha-svc', instance.name, ctx);
+    return instance;
+}
+exports.createBirmeCaptchaSvcInstance = createBirmeCaptchaSvcInstance;
+/**
+ * Remove a Captcha Service instance
+ *
+ * @description Enhance your security effortlessly with our reliable CAPTCHA Service! Easily generate and verify CAPTCHAs to protect against automated attacks. Quick setup, seamless integration, robust solution!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be removed
+ */
+async function removeBirmeCaptchaSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-captcha-svc');
+    await (0, client_core_1.removeInstance)(ctx, 'birme-captcha-svc', name, serviceAccessToken);
+}
+exports.removeBirmeCaptchaSvcInstance = removeBirmeCaptchaSvcInstance;
+/**
+ * Get a Captcha Service instance
+ *
+ * @description Enhance your security effortlessly with our reliable CAPTCHA Service! Easily generate and verify CAPTCHAs to protect against automated attacks. Quick setup, seamless integration, robust solution!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be retrieved
+ * @returns {BirmeCaptchaSvc} - Service instance
+ */
+async function getBirmeCaptchaSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-captcha-svc');
+    return await (0, client_core_1.getInstance)(ctx, 'birme-captcha-svc', name, serviceAccessToken);
+}
+exports.getBirmeCaptchaSvcInstance = getBirmeCaptchaSvcInstance;
+//# sourceMappingURL=birme-captcha-svc.js.map
+
+/***/ }),
+
+/***/ 2000:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBirmeContactFormSvcInstance = exports.removeBirmeContactFormSvcInstance = exports.createBirmeContactFormSvcInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Contact Form Service instance
+ *
+ * @description Streamline your communication with our Contact Form Service! Seamlessly send messages from your website directly to Slack. Easy-to-install, Docker-ready backend ensures you never miss a lead. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BirmeContactFormSvcConfig}} body - Service instance configuration
+ * @returns {BirmeContactFormSvc} - Service instance
+ * @example
+ * import { Context, createBirmeContactFormSvcInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBirmeContactFormSvcInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBirmeContactFormSvcInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-contact-form-svc');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'birme-contact-form-svc', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('birme-contact-form-svc', instance.name, ctx);
+    return instance;
+}
+exports.createBirmeContactFormSvcInstance = createBirmeContactFormSvcInstance;
+/**
+ * Remove a Contact Form Service instance
+ *
+ * @description Streamline your communication with our Contact Form Service! Seamlessly send messages from your website directly to Slack. Easy-to-install, Docker-ready backend ensures you never miss a lead. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be removed
+ */
+async function removeBirmeContactFormSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-contact-form-svc');
+    await (0, client_core_1.removeInstance)(ctx, 'birme-contact-form-svc', name, serviceAccessToken);
+}
+exports.removeBirmeContactFormSvcInstance = removeBirmeContactFormSvcInstance;
+/**
+ * Get a Contact Form Service instance
+ *
+ * @description Streamline your communication with our Contact Form Service! Seamlessly send messages from your website directly to Slack. Easy-to-install, Docker-ready backend ensures you never miss a lead. Try it now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be retrieved
+ * @returns {BirmeContactFormSvc} - Service instance
+ */
+async function getBirmeContactFormSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-contact-form-svc');
+    return await (0, client_core_1.getInstance)(ctx, 'birme-contact-form-svc', name, serviceAccessToken);
+}
+exports.getBirmeContactFormSvcInstance = getBirmeContactFormSvcInstance;
+//# sourceMappingURL=birme-contact-form-svc.js.map
+
+/***/ }),
+
+/***/ 3677:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBirmeLambdaInstance = exports.removeBirmeLambdaInstance = exports.createBirmeLambdaInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new lambda instance
+ *
+ * @description Effortlessly deploy JavaScript/TypeScript code as HTTP-based lambda functions with our simple solution. Just zip, upload, and watch your code run on any HTTP request. Get started quickly with minimal setup!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BirmeLambdaConfig}} body - Service instance configuration
+ * @returns {BirmeLambda} - Service instance
+ * @example
+ * import { Context, createBirmeLambdaInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBirmeLambdaInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBirmeLambdaInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-lambda');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'birme-lambda', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('birme-lambda', instance.name, ctx);
+    return instance;
+}
+exports.createBirmeLambdaInstance = createBirmeLambdaInstance;
+/**
+ * Remove a lambda instance
+ *
+ * @description Effortlessly deploy JavaScript/TypeScript code as HTTP-based lambda functions with our simple solution. Just zip, upload, and watch your code run on any HTTP request. Get started quickly with minimal setup!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the lambda to be removed
+ */
+async function removeBirmeLambdaInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-lambda');
+    await (0, client_core_1.removeInstance)(ctx, 'birme-lambda', name, serviceAccessToken);
+}
+exports.removeBirmeLambdaInstance = removeBirmeLambdaInstance;
+/**
+ * Get a lambda instance
+ *
+ * @description Effortlessly deploy JavaScript/TypeScript code as HTTP-based lambda functions with our simple solution. Just zip, upload, and watch your code run on any HTTP request. Get started quickly with minimal setup!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the lambda to be retrieved
+ * @returns {BirmeLambda} - Service instance
+ */
+async function getBirmeLambdaInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-lambda');
+    return await (0, client_core_1.getInstance)(ctx, 'birme-lambda', name, serviceAccessToken);
+}
+exports.getBirmeLambdaInstance = getBirmeLambdaInstance;
+//# sourceMappingURL=birme-lambda.js.map
+
+/***/ }),
+
+/***/ 8902:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBirmeOscPostgresqlInstance = exports.removeBirmeOscPostgresqlInstance = exports.createBirmeOscPostgresqlInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new PostgreSQL instance
+ *
+ * @description Unlock the full potential of your data with the PostgreSQL OSC image, seamlessly integrated for use in Eyevinn Open Source Cloud. Experience robust scalability, high security, and unmatched extensibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BirmeOscPostgresqlConfig}} body - Service instance configuration
+ * @returns {BirmeOscPostgresql} - Service instance
+ * @example
+ * import { Context, createBirmeOscPostgresqlInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBirmeOscPostgresqlInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBirmeOscPostgresqlInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-osc-postgresql');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'birme-osc-postgresql', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('birme-osc-postgresql', instance.name, ctx);
+    return instance;
+}
+exports.createBirmeOscPostgresqlInstance = createBirmeOscPostgresqlInstance;
+/**
+ * Remove a PostgreSQL instance
+ *
+ * @description Unlock the full potential of your data with the PostgreSQL OSC image, seamlessly integrated for use in Eyevinn Open Source Cloud. Experience robust scalability, high security, and unmatched extensibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the psql-db to be removed
+ */
+async function removeBirmeOscPostgresqlInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-osc-postgresql');
+    await (0, client_core_1.removeInstance)(ctx, 'birme-osc-postgresql', name, serviceAccessToken);
+}
+exports.removeBirmeOscPostgresqlInstance = removeBirmeOscPostgresqlInstance;
+/**
+ * Get a PostgreSQL instance
+ *
+ * @description Unlock the full potential of your data with the PostgreSQL OSC image, seamlessly integrated for use in Eyevinn Open Source Cloud. Experience robust scalability, high security, and unmatched extensibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the psql-db to be retrieved
+ * @returns {BirmeOscPostgresql} - Service instance
+ */
+async function getBirmeOscPostgresqlInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('birme-osc-postgresql');
+    return await (0, client_core_1.getInstance)(ctx, 'birme-osc-postgresql', name, serviceAccessToken);
+}
+exports.getBirmeOscPostgresqlInstance = getBirmeOscPostgresqlInstance;
+//# sourceMappingURL=birme-osc-postgresql.js.map
+
+/***/ }),
+
+/***/ 5323:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBlueskySocialPdsInstance = exports.removeBlueskySocialPdsInstance = exports.createBlueskySocialPdsInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Bluesky Personal Data Server instance
+ *
+ * @description Empower your network with self-hosted Bluesky PDS! Harness the power of AT Protocol to easily manage your data server. Seamless installation, full control, and enhanced security for your social media presence.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BlueskySocialPdsConfig}} body - Service instance configuration
+ * @returns {BlueskySocialPds} - Service instance
+ * @example
+ * import { Context, createBlueskySocialPdsInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBlueskySocialPdsInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBlueskySocialPdsInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bluesky-social-pds');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'bluesky-social-pds', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('bluesky-social-pds', instance.name, ctx);
+    return instance;
+}
+exports.createBlueskySocialPdsInstance = createBlueskySocialPdsInstance;
+/**
+ * Remove a Bluesky Personal Data Server instance
+ *
+ * @description Empower your network with self-hosted Bluesky PDS! Harness the power of AT Protocol to easily manage your data server. Seamless installation, full control, and enhanced security for your social media presence.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the pds to be removed
+ */
+async function removeBlueskySocialPdsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bluesky-social-pds');
+    await (0, client_core_1.removeInstance)(ctx, 'bluesky-social-pds', name, serviceAccessToken);
+}
+exports.removeBlueskySocialPdsInstance = removeBlueskySocialPdsInstance;
+/**
+ * Get a Bluesky Personal Data Server instance
+ *
+ * @description Empower your network with self-hosted Bluesky PDS! Harness the power of AT Protocol to easily manage your data server. Seamless installation, full control, and enhanced security for your social media presence.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the pds to be retrieved
+ * @returns {BlueskySocialPds} - Service instance
+ */
+async function getBlueskySocialPdsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bluesky-social-pds');
+    return await (0, client_core_1.getInstance)(ctx, 'bluesky-social-pds', name, serviceAccessToken);
+}
+exports.getBlueskySocialPdsInstance = getBlueskySocialPdsInstance;
+//# sourceMappingURL=bluesky-social-pds.js.map
+
+/***/ }),
+
+/***/ 251:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBwallbergKingsAndPigsTsInstance = exports.removeBwallbergKingsAndPigsTsInstance = exports.createBwallbergKingsAndPigsTsInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Kings and Pigs instance
+ *
+ * @description Dive into Kings and Pigs, a vibrant 2D TypeScript game! Explore custom ECS architecture & physics with Planck.js. Perfect for TypeScript learners & game enthusiasts. Play now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {BwallbergKingsAndPigsTsConfig}} body - Service instance configuration
+ * @returns {BwallbergKingsAndPigsTs} - Service instance
+ * @example
+ * import { Context, createBwallbergKingsAndPigsTsInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createBwallbergKingsAndPigsTsInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createBwallbergKingsAndPigsTsInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bwallberg-kings-and-pigs-ts');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'bwallberg-kings-and-pigs-ts', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('bwallberg-kings-and-pigs-ts', instance.name, ctx);
+    return instance;
+}
+exports.createBwallbergKingsAndPigsTsInstance = createBwallbergKingsAndPigsTsInstance;
+/**
+ * Remove a Kings and Pigs instance
+ *
+ * @description Dive into Kings and Pigs, a vibrant 2D TypeScript game! Explore custom ECS architecture & physics with Planck.js. Perfect for TypeScript learners & game enthusiasts. Play now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the kings-and-pigs-ts to be removed
+ */
+async function removeBwallbergKingsAndPigsTsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bwallberg-kings-and-pigs-ts');
+    await (0, client_core_1.removeInstance)(ctx, 'bwallberg-kings-and-pigs-ts', name, serviceAccessToken);
+}
+exports.removeBwallbergKingsAndPigsTsInstance = removeBwallbergKingsAndPigsTsInstance;
+/**
+ * Get a Kings and Pigs instance
+ *
+ * @description Dive into Kings and Pigs, a vibrant 2D TypeScript game! Explore custom ECS architecture & physics with Planck.js. Perfect for TypeScript learners & game enthusiasts. Play now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the kings-and-pigs-ts to be retrieved
+ * @returns {BwallbergKingsAndPigsTs} - Service instance
+ */
+async function getBwallbergKingsAndPigsTsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('bwallberg-kings-and-pigs-ts');
+    return await (0, client_core_1.getInstance)(ctx, 'bwallberg-kings-and-pigs-ts', name, serviceAccessToken);
+}
+exports.getBwallbergKingsAndPigsTsInstance = getBwallbergKingsAndPigsTsInstance;
+//# sourceMappingURL=bwallberg-kings-and-pigs-ts.js.map
+
+/***/ }),
+
+/***/ 1519:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getChambanaNetDockerPodcastgenInstance = exports.removeChambanaNetDockerPodcastgenInstance = exports.createChambanaNetDockerPodcastgenInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Podcast Generator instance
+ *
+ * @description Effortlessly host and manage your podcasts with our Docker container for Podcast Generator. Quick setup and version flexibility let you focus on content creation while we handle the rest.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ChambanaNetDockerPodcastgenConfig}} body - Service instance configuration
+ * @returns {ChambanaNetDockerPodcastgen} - Service instance
+ * @example
+ * import { Context, createChambanaNetDockerPodcastgenInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createChambanaNetDockerPodcastgenInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createChambanaNetDockerPodcastgenInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('chambana-net-docker-podcastgen');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'chambana-net-docker-podcastgen', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('chambana-net-docker-podcastgen', instance.name, ctx);
+    return instance;
+}
+exports.createChambanaNetDockerPodcastgenInstance = createChambanaNetDockerPodcastgenInstance;
+/**
+ * Remove a Podcast Generator instance
+ *
+ * @description Effortlessly host and manage your podcasts with our Docker container for Podcast Generator. Quick setup and version flexibility let you focus on content creation while we handle the rest.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the podcast-generator to be removed
+ */
+async function removeChambanaNetDockerPodcastgenInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('chambana-net-docker-podcastgen');
+    await (0, client_core_1.removeInstance)(ctx, 'chambana-net-docker-podcastgen', name, serviceAccessToken);
+}
+exports.removeChambanaNetDockerPodcastgenInstance = removeChambanaNetDockerPodcastgenInstance;
+/**
+ * Get a Podcast Generator instance
+ *
+ * @description Effortlessly host and manage your podcasts with our Docker container for Podcast Generator. Quick setup and version flexibility let you focus on content creation while we handle the rest.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the podcast-generator to be retrieved
+ * @returns {ChambanaNetDockerPodcastgen} - Service instance
+ */
+async function getChambanaNetDockerPodcastgenInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('chambana-net-docker-podcastgen');
+    return await (0, client_core_1.getInstance)(ctx, 'chambana-net-docker-podcastgen', name, serviceAccessToken);
+}
+exports.getChambanaNetDockerPodcastgenInstance = getChambanaNetDockerPodcastgenInstance;
+//# sourceMappingURL=chambana-net-docker-podcastgen.js.map
+
+/***/ }),
+
+/***/ 4432:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getChannelEngineInstance = exports.removeChannelEngineInstance = exports.createChannelEngineInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new FAST Channel Engine instance
+ *
+ * @description Based on VOD2Live Technology you can generate a numerous amounts of FAST channels with a fraction of energy consumption compared to live transcoded FAST channels
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ChannelEngineConfig}} body - Service instance configuration
+ * @returns {ChannelEngine} - Service instance
+ * @example
+ * import { Context, createChannelEngineInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createChannelEngineInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createChannelEngineInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('channel-engine');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'channel-engine', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('channel-engine', instance.name, ctx);
+    return instance;
+}
+exports.createChannelEngineInstance = createChannelEngineInstance;
+/**
+ * Remove a FAST Channel Engine instance
+ *
+ * @description Based on VOD2Live Technology you can generate a numerous amounts of FAST channels with a fraction of energy consumption compared to live transcoded FAST channels
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the channel to be removed
+ */
+async function removeChannelEngineInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('channel-engine');
+    await (0, client_core_1.removeInstance)(ctx, 'channel-engine', name, serviceAccessToken);
+}
+exports.removeChannelEngineInstance = removeChannelEngineInstance;
+/**
+ * Get a FAST Channel Engine instance
+ *
+ * @description Based on VOD2Live Technology you can generate a numerous amounts of FAST channels with a fraction of energy consumption compared to live transcoded FAST channels
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the channel to be retrieved
+ * @returns {ChannelEngine} - Service instance
+ */
+async function getChannelEngineInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('channel-engine');
+    return await (0, client_core_1.getInstance)(ctx, 'channel-engine', name, serviceAccessToken);
+}
+exports.getChannelEngineInstance = getChannelEngineInstance;
+//# sourceMappingURL=channel-engine.js.map
+
+/***/ }),
+
+/***/ 5397:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getDashIndustryForumLivesim2Instance = exports.removeDashIndustryForumLivesim2Instance = exports.createDashIndustryForumLivesim2Instance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new livesim2 instance
+ *
+ * @description Elevate your streaming with livesim2, the next-gen DASH Live Source Simulator, offering infinite live streams, flexible content handling, and on-the-fly subtitles in multiple languages. Perfect for testing and demo purposes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {DashIndustryForumLivesim2Config}} body - Service instance configuration
+ * @returns {DashIndustryForumLivesim2} - Service instance
+ * @example
+ * import { Context, createDashIndustryForumLivesim2Instance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createDashIndustryForumLivesim2Instance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createDashIndustryForumLivesim2Instance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('dash-industry-forum-livesim2');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'dash-industry-forum-livesim2', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('dash-industry-forum-livesim2', instance.name, ctx);
+    return instance;
+}
+exports.createDashIndustryForumLivesim2Instance = createDashIndustryForumLivesim2Instance;
+/**
+ * Remove a livesim2 instance
+ *
+ * @description Elevate your streaming with livesim2, the next-gen DASH Live Source Simulator, offering infinite live streams, flexible content handling, and on-the-fly subtitles in multiple languages. Perfect for testing and demo purposes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the livesimulators to be removed
+ */
+async function removeDashIndustryForumLivesim2Instance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('dash-industry-forum-livesim2');
+    await (0, client_core_1.removeInstance)(ctx, 'dash-industry-forum-livesim2', name, serviceAccessToken);
+}
+exports.removeDashIndustryForumLivesim2Instance = removeDashIndustryForumLivesim2Instance;
+/**
+ * Get a livesim2 instance
+ *
+ * @description Elevate your streaming with livesim2, the next-gen DASH Live Source Simulator, offering infinite live streams, flexible content handling, and on-the-fly subtitles in multiple languages. Perfect for testing and demo purposes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the livesimulators to be retrieved
+ * @returns {DashIndustryForumLivesim2} - Service instance
+ */
+async function getDashIndustryForumLivesim2Instance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('dash-industry-forum-livesim2');
+    return await (0, client_core_1.getInstance)(ctx, 'dash-industry-forum-livesim2', name, serviceAccessToken);
+}
+exports.getDashIndustryForumLivesim2Instance = getDashIndustryForumLivesim2Instance;
+//# sourceMappingURL=dash-industry-forum-livesim2.js.map
+
+/***/ }),
+
+/***/ 8407:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getDatarheiRestreamerInstance = exports.removeDatarheiRestreamerInstance = exports.createDatarheiRestreamerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new restreamer instance
+ *
+ * @description Introducing Restreamer: A free, self-hosting solution for seamless live streaming to multiple platforms like YouTube, Twitch, and more. Easy setup, diverse features, hardware support, and GDPR compliance make it a must-have.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {DatarheiRestreamerConfig}} body - Service instance configuration
+ * @returns {DatarheiRestreamer} - Service instance
+ * @example
+ * import { Context, createDatarheiRestreamerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createDatarheiRestreamerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createDatarheiRestreamerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('datarhei-restreamer');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'datarhei-restreamer', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('datarhei-restreamer', instance.name, ctx);
+    return instance;
+}
+exports.createDatarheiRestreamerInstance = createDatarheiRestreamerInstance;
+/**
+ * Remove a restreamer instance
+ *
+ * @description Introducing Restreamer: A free, self-hosting solution for seamless live streaming to multiple platforms like YouTube, Twitch, and more. Easy setup, diverse features, hardware support, and GDPR compliance make it a must-have.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the restreamer to be removed
+ */
+async function removeDatarheiRestreamerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('datarhei-restreamer');
+    await (0, client_core_1.removeInstance)(ctx, 'datarhei-restreamer', name, serviceAccessToken);
+}
+exports.removeDatarheiRestreamerInstance = removeDatarheiRestreamerInstance;
+/**
+ * Get a restreamer instance
+ *
+ * @description Introducing Restreamer: A free, self-hosting solution for seamless live streaming to multiple platforms like YouTube, Twitch, and more. Easy setup, diverse features, hardware support, and GDPR compliance make it a must-have.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the restreamer to be retrieved
+ * @returns {DatarheiRestreamer} - Service instance
+ */
+async function getDatarheiRestreamerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('datarhei-restreamer');
+    return await (0, client_core_1.getInstance)(ctx, 'datarhei-restreamer', name, serviceAccessToken);
+}
+exports.getDatarheiRestreamerInstance = getDatarheiRestreamerInstance;
+//# sourceMappingURL=datarhei-restreamer.js.map
+
+/***/ }),
+
+/***/ 2331:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getDocusealcoDocusealInstance = exports.removeDocusealcoDocusealInstance = exports.createDocusealcoDocusealInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Docuseal instance
+ *
+ * @description Streamline your document workflow with DocuSeal, the leading open-source solution for secure, mobile-optimized digital form filling and signing. Perfect for any business needing swift and seamless e-signatures.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {DocusealcoDocusealConfig}} body - Service instance configuration
+ * @returns {DocusealcoDocuseal} - Service instance
+ * @example
+ * import { Context, createDocusealcoDocusealInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createDocusealcoDocusealInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createDocusealcoDocusealInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('docusealco-docuseal');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'docusealco-docuseal', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('docusealco-docuseal', instance.name, ctx);
+    return instance;
+}
+exports.createDocusealcoDocusealInstance = createDocusealcoDocusealInstance;
+/**
+ * Remove a Docuseal instance
+ *
+ * @description Streamline your document workflow with DocuSeal, the leading open-source solution for secure, mobile-optimized digital form filling and signing. Perfect for any business needing swift and seamless e-signatures.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the docuseal to be removed
+ */
+async function removeDocusealcoDocusealInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('docusealco-docuseal');
+    await (0, client_core_1.removeInstance)(ctx, 'docusealco-docuseal', name, serviceAccessToken);
+}
+exports.removeDocusealcoDocusealInstance = removeDocusealcoDocusealInstance;
+/**
+ * Get a Docuseal instance
+ *
+ * @description Streamline your document workflow with DocuSeal, the leading open-source solution for secure, mobile-optimized digital form filling and signing. Perfect for any business needing swift and seamless e-signatures.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the docuseal to be retrieved
+ * @returns {DocusealcoDocuseal} - Service instance
+ */
+async function getDocusealcoDocusealInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('docusealco-docuseal');
+    return await (0, client_core_1.getInstance)(ctx, 'docusealco-docuseal', name, serviceAccessToken);
+}
+exports.getDocusealcoDocusealInstance = getDocusealcoDocusealInstance;
+//# sourceMappingURL=docusealco-docuseal.js.map
+
+/***/ }),
+
+/***/ 9442:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getDrawdbIoDrawdbInstance = exports.removeDrawdbIoDrawdbInstance = exports.createDrawdbIoDrawdbInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new drawDB instance
+ *
+ * @description Effortlessly design and manage your database schema with drawDB. It's a user-friendly online DBER editor that lets you create diagrams and generate SQL without any hassle, all directly in your browser!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {DrawdbIoDrawdbConfig}} body - Service instance configuration
+ * @returns {DrawdbIoDrawdb} - Service instance
+ * @example
+ * import { Context, createDrawdbIoDrawdbInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createDrawdbIoDrawdbInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createDrawdbIoDrawdbInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('drawdb-io-drawdb');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'drawdb-io-drawdb', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('drawdb-io-drawdb', instance.name, ctx);
+    return instance;
+}
+exports.createDrawdbIoDrawdbInstance = createDrawdbIoDrawdbInstance;
+/**
+ * Remove a drawDB instance
+ *
+ * @description Effortlessly design and manage your database schema with drawDB. It's a user-friendly online DBER editor that lets you create diagrams and generate SQL without any hassle, all directly in your browser!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the editor to be removed
+ */
+async function removeDrawdbIoDrawdbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('drawdb-io-drawdb');
+    await (0, client_core_1.removeInstance)(ctx, 'drawdb-io-drawdb', name, serviceAccessToken);
+}
+exports.removeDrawdbIoDrawdbInstance = removeDrawdbIoDrawdbInstance;
+/**
+ * Get a drawDB instance
+ *
+ * @description Effortlessly design and manage your database schema with drawDB. It's a user-friendly online DBER editor that lets you create diagrams and generate SQL without any hassle, all directly in your browser!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the editor to be retrieved
+ * @returns {DrawdbIoDrawdb} - Service instance
+ */
+async function getDrawdbIoDrawdbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('drawdb-io-drawdb');
+    return await (0, client_core_1.getInstance)(ctx, 'drawdb-io-drawdb', name, serviceAccessToken);
+}
+exports.getDrawdbIoDrawdbInstance = getDrawdbIoDrawdbInstance;
+//# sourceMappingURL=drawdb-io-drawdb.js.map
+
+/***/ }),
+
+/***/ 9432:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEncoreInstance = exports.removeEncoreInstance = exports.createEncoreInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new SVT Encore instance
+ *
+ * @description SVT Encore is an open-source video transcoding system for efficient cloud-based video processing. It offers scalable, automated transcoding to optimize video workflows for various platforms, supporting multiple formats and codecs. With a focus on cost-effectiveness and flexibility, Encore is ideal for broadcasters and content creators needing dynamic scaling and reliable performance in their video production and distribution processes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EncoreConfig}} body - Service instance configuration
+ * @returns {Encore} - Service instance
+ * @example
+ * import { Context, createEncoreInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEncoreInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEncoreInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('encore');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'encore', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('encore', instance.name, ctx);
+    return instance;
+}
+exports.createEncoreInstance = createEncoreInstance;
+/**
+ * Remove a SVT Encore instance
+ *
+ * @description SVT Encore is an open-source video transcoding system for efficient cloud-based video processing. It offers scalable, automated transcoding to optimize video workflows for various platforms, supporting multiple formats and codecs. With a focus on cost-effectiveness and flexibility, Encore is ideal for broadcasters and content creators needing dynamic scaling and reliable performance in their video production and distribution processes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the queue to be removed
+ */
+async function removeEncoreInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('encore');
+    await (0, client_core_1.removeInstance)(ctx, 'encore', name, serviceAccessToken);
+}
+exports.removeEncoreInstance = removeEncoreInstance;
+/**
+ * Get a SVT Encore instance
+ *
+ * @description SVT Encore is an open-source video transcoding system for efficient cloud-based video processing. It offers scalable, automated transcoding to optimize video workflows for various platforms, supporting multiple formats and codecs. With a focus on cost-effectiveness and flexibility, Encore is ideal for broadcasters and content creators needing dynamic scaling and reliable performance in their video production and distribution processes.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the queue to be retrieved
+ * @returns {Encore} - Service instance
+ */
+async function getEncoreInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('encore');
+    return await (0, client_core_1.getInstance)(ctx, 'encore', name, serviceAccessToken);
+}
+exports.getEncoreInstance = getEncoreInstance;
+//# sourceMappingURL=encore.js.map
+
+/***/ }),
+
+/***/ 4214:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getErnestocaroccaHelloWorldInstance = exports.removeErnestocaroccaHelloWorldInstance = exports.createErnestocaroccaHelloWorldInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Hello World instance
+ *
+ * @description Harness the power of Next.js 14 and NextUI v2 with this feature-rich template. Perfect for creating sleek, dynamic apps with Tailwind CSS and TypeScript. Kickstart your project efficiently today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ErnestocaroccaHelloWorldConfig}} body - Service instance configuration
+ * @returns {ErnestocaroccaHelloWorld} - Service instance
+ * @example
+ * import { Context, createErnestocaroccaHelloWorldInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createErnestocaroccaHelloWorldInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createErnestocaroccaHelloWorldInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ernestocarocca-hello-world');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'ernestocarocca-hello-world', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('ernestocarocca-hello-world', instance.name, ctx);
+    return instance;
+}
+exports.createErnestocaroccaHelloWorldInstance = createErnestocaroccaHelloWorldInstance;
+/**
+ * Remove a Hello World instance
+ *
+ * @description Harness the power of Next.js 14 and NextUI v2 with this feature-rich template. Perfect for creating sleek, dynamic apps with Tailwind CSS and TypeScript. Kickstart your project efficiently today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the example to be removed
+ */
+async function removeErnestocaroccaHelloWorldInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ernestocarocca-hello-world');
+    await (0, client_core_1.removeInstance)(ctx, 'ernestocarocca-hello-world', name, serviceAccessToken);
+}
+exports.removeErnestocaroccaHelloWorldInstance = removeErnestocaroccaHelloWorldInstance;
+/**
+ * Get a Hello World instance
+ *
+ * @description Harness the power of Next.js 14 and NextUI v2 with this feature-rich template. Perfect for creating sleek, dynamic apps with Tailwind CSS and TypeScript. Kickstart your project efficiently today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the example to be retrieved
+ * @returns {ErnestocaroccaHelloWorld} - Service instance
+ */
+async function getErnestocaroccaHelloWorldInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ernestocarocca-hello-world');
+    return await (0, client_core_1.getInstance)(ctx, 'ernestocarocca-hello-world', name, serviceAccessToken);
+}
+exports.getErnestocaroccaHelloWorldInstance = getErnestocaroccaHelloWorldInstance;
+//# sourceMappingURL=ernestocarocca-hello-world.js.map
+
+/***/ }),
+
+/***/ 4571:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnAiCodeReviewerInstance = exports.removeEyevinnAiCodeReviewerInstance = exports.createEyevinnAiCodeReviewerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new AI Code Reviewer instance
+ *
+ * @description Elevate your code quality with AI Code Reviewer! Leverage AI to review your code effortlessly, ensuring top-notch quality. Integrate easily with your cloud setup for seamless code enhancement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnAiCodeReviewerConfig}} body - Service instance configuration
+ * @returns {EyevinnAiCodeReviewer} - Service instance
+ * @example
+ * import { Context, createEyevinnAiCodeReviewerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnAiCodeReviewerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnAiCodeReviewerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ai-code-reviewer');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-ai-code-reviewer', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-ai-code-reviewer', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnAiCodeReviewerInstance = createEyevinnAiCodeReviewerInstance;
+/**
+ * Remove a AI Code Reviewer instance
+ *
+ * @description Elevate your code quality with AI Code Reviewer! Leverage AI to review your code effortlessly, ensuring top-notch quality. Integrate easily with your cloud setup for seamless code enhancement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the code-reviewer to be removed
+ */
+async function removeEyevinnAiCodeReviewerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ai-code-reviewer');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-ai-code-reviewer', name, serviceAccessToken);
+}
+exports.removeEyevinnAiCodeReviewerInstance = removeEyevinnAiCodeReviewerInstance;
+/**
+ * Get a AI Code Reviewer instance
+ *
+ * @description Elevate your code quality with AI Code Reviewer! Leverage AI to review your code effortlessly, ensuring top-notch quality. Integrate easily with your cloud setup for seamless code enhancement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the code-reviewer to be retrieved
+ * @returns {EyevinnAiCodeReviewer} - Service instance
+ */
+async function getEyevinnAiCodeReviewerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ai-code-reviewer');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-ai-code-reviewer', name, serviceAccessToken);
+}
+exports.getEyevinnAiCodeReviewerInstance = getEyevinnAiCodeReviewerInstance;
+//# sourceMappingURL=eyevinn-ai-code-reviewer.js.map
+
+/***/ }),
+
+/***/ 1408:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnAppConfigSvcInstance = exports.removeEyevinnAppConfigSvcInstance = exports.createEyevinnAppConfigSvcInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Application Config Service instance
+ *
+ * @description Supercharge your application's efficiency by instantly providing configuration values with our Application Configuration Service. Integrate seamlessly with Redis, leverage cache control, and scale effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnAppConfigSvcConfig}} body - Service instance configuration
+ * @returns {EyevinnAppConfigSvc} - Service instance
+ * @example
+ * import { Context, createEyevinnAppConfigSvcInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnAppConfigSvcInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnAppConfigSvcInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-app-config-svc');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-app-config-svc', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-app-config-svc', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnAppConfigSvcInstance = createEyevinnAppConfigSvcInstance;
+/**
+ * Remove a Application Config Service instance
+ *
+ * @description Supercharge your application's efficiency by instantly providing configuration values with our Application Configuration Service. Integrate seamlessly with Redis, leverage cache control, and scale effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the config-service to be removed
+ */
+async function removeEyevinnAppConfigSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-app-config-svc');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-app-config-svc', name, serviceAccessToken);
+}
+exports.removeEyevinnAppConfigSvcInstance = removeEyevinnAppConfigSvcInstance;
+/**
+ * Get a Application Config Service instance
+ *
+ * @description Supercharge your application's efficiency by instantly providing configuration values with our Application Configuration Service. Integrate seamlessly with Redis, leverage cache control, and scale effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the config-service to be retrieved
+ * @returns {EyevinnAppConfigSvc} - Service instance
+ */
+async function getEyevinnAppConfigSvcInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-app-config-svc');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-app-config-svc', name, serviceAccessToken);
+}
+exports.getEyevinnAppConfigSvcInstance = getEyevinnAppConfigSvcInstance;
+//# sourceMappingURL=eyevinn-app-config-svc.js.map
+
+/***/ }),
+
+/***/ 9496:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnAutoSubtitlesInstance = exports.removeEyevinnAutoSubtitlesInstance = exports.createEyevinnAutoSubtitlesInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Subtitle Generator instance
+ *
+ * @description Automatically generate subtitles from an input audio or video file using Open AI Whisper.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnAutoSubtitlesConfig}} body - Service instance configuration
+ * @returns {EyevinnAutoSubtitles} - Service instance
+ * @example
+ * import { Context, createEyevinnAutoSubtitlesInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnAutoSubtitlesInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnAutoSubtitlesInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-auto-subtitles');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-auto-subtitles', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-auto-subtitles', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnAutoSubtitlesInstance = createEyevinnAutoSubtitlesInstance;
+/**
+ * Remove a Subtitle Generator instance
+ *
+ * @description Automatically generate subtitles from an input audio or video file using Open AI Whisper.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the generator to be removed
+ */
+async function removeEyevinnAutoSubtitlesInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-auto-subtitles');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-auto-subtitles', name, serviceAccessToken);
+}
+exports.removeEyevinnAutoSubtitlesInstance = removeEyevinnAutoSubtitlesInstance;
+/**
+ * Get a Subtitle Generator instance
+ *
+ * @description Automatically generate subtitles from an input audio or video file using Open AI Whisper.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the generator to be retrieved
+ * @returns {EyevinnAutoSubtitles} - Service instance
+ */
+async function getEyevinnAutoSubtitlesInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-auto-subtitles');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-auto-subtitles', name, serviceAccessToken);
+}
+exports.getEyevinnAutoSubtitlesInstance = getEyevinnAutoSubtitlesInstance;
+//# sourceMappingURL=eyevinn-auto-subtitles.js.map
+
+/***/ }),
+
+/***/ 6128:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnCastReceiverInstance = exports.removeEyevinnCastReceiverInstance = exports.createEyevinnCastReceiverInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Chromecast receiver instance
+ *
+ * @description A basic custom chromecast receiver that can be configured using environment variables. Add your company branding to your own chromecast receiver without writing a single line of code!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnCastReceiverConfig}} body - Service instance configuration
+ * @returns {EyevinnCastReceiver} - Service instance
+ * @example
+ * import { Context, createEyevinnCastReceiverInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnCastReceiverInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnCastReceiverInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-cast-receiver');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-cast-receiver', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-cast-receiver', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnCastReceiverInstance = createEyevinnCastReceiverInstance;
+/**
+ * Remove a Chromecast receiver instance
+ *
+ * @description A basic custom chromecast receiver that can be configured using environment variables. Add your company branding to your own chromecast receiver without writing a single line of code!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the receiver to be removed
+ */
+async function removeEyevinnCastReceiverInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-cast-receiver');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-cast-receiver', name, serviceAccessToken);
+}
+exports.removeEyevinnCastReceiverInstance = removeEyevinnCastReceiverInstance;
+/**
+ * Get a Chromecast receiver instance
+ *
+ * @description A basic custom chromecast receiver that can be configured using environment variables. Add your company branding to your own chromecast receiver without writing a single line of code!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the receiver to be retrieved
+ * @returns {EyevinnCastReceiver} - Service instance
+ */
+async function getEyevinnCastReceiverInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-cast-receiver');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-cast-receiver', name, serviceAccessToken);
+}
+exports.getEyevinnCastReceiverInstance = getEyevinnCastReceiverInstance;
+//# sourceMappingURL=eyevinn-cast-receiver.js.map
+
+/***/ }),
+
+/***/ 1846:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnCeSampleWebhookInstance = exports.removeEyevinnCeSampleWebhookInstance = exports.createEyevinnCeSampleWebhookInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new FAST Engine Sample Webhook instance
+ *
+ * @description Unlock seamless streaming experiences with our example webhook for FAST Channel Engine. Effortlessly integrate with `/loop/nextVod` and `/ads/nextVod` to optimize content delivery and boost viewer engagement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnCeSampleWebhookConfig}} body - Service instance configuration
+ * @returns {EyevinnCeSampleWebhook} - Service instance
+ * @example
+ * import { Context, createEyevinnCeSampleWebhookInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnCeSampleWebhookInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnCeSampleWebhookInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ce-sample-webhook');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-ce-sample-webhook', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-ce-sample-webhook', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnCeSampleWebhookInstance = createEyevinnCeSampleWebhookInstance;
+/**
+ * Remove a FAST Engine Sample Webhook instance
+ *
+ * @description Unlock seamless streaming experiences with our example webhook for FAST Channel Engine. Effortlessly integrate with `/loop/nextVod` and `/ads/nextVod` to optimize content delivery and boost viewer engagement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the webhooks to be removed
+ */
+async function removeEyevinnCeSampleWebhookInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ce-sample-webhook');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-ce-sample-webhook', name, serviceAccessToken);
+}
+exports.removeEyevinnCeSampleWebhookInstance = removeEyevinnCeSampleWebhookInstance;
+/**
+ * Get a FAST Engine Sample Webhook instance
+ *
+ * @description Unlock seamless streaming experiences with our example webhook for FAST Channel Engine. Effortlessly integrate with `/loop/nextVod` and `/ads/nextVod` to optimize content delivery and boost viewer engagement.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the webhooks to be retrieved
+ * @returns {EyevinnCeSampleWebhook} - Service instance
+ */
+async function getEyevinnCeSampleWebhookInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-ce-sample-webhook');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-ce-sample-webhook', name, serviceAccessToken);
+}
+exports.getEyevinnCeSampleWebhookInstance = getEyevinnCeSampleWebhookInstance;
+//# sourceMappingURL=eyevinn-ce-sample-webhook.js.map
+
+/***/ }),
+
+/***/ 625:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnChannelEngineBridgeInstance = exports.removeEyevinnChannelEngineBridgeInstance = exports.createEyevinnChannelEngineBridgeInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Channel Engine Bridge instance
+ *
+ * @description Channel Engine Bridge enables seamless pushing of FAST channels from FAST Channel Engine to distribution platforms such as AWS MediaPackage and simplifies the process of pushing channels to a wide range of distribution networks.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnChannelEngineBridgeConfig}} body - Service instance configuration
+ * @returns {EyevinnChannelEngineBridge} - Service instance
+ * @example
+ * import { Context, createEyevinnChannelEngineBridgeInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnChannelEngineBridgeInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnChannelEngineBridgeInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-channel-engine-bridge');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-channel-engine-bridge', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-channel-engine-bridge', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnChannelEngineBridgeInstance = createEyevinnChannelEngineBridgeInstance;
+/**
+ * Remove a Channel Engine Bridge instance
+ *
+ * @description Channel Engine Bridge enables seamless pushing of FAST channels from FAST Channel Engine to distribution platforms such as AWS MediaPackage and simplifies the process of pushing channels to a wide range of distribution networks.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the channel-engine-bridge to be removed
+ */
+async function removeEyevinnChannelEngineBridgeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-channel-engine-bridge');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-channel-engine-bridge', name, serviceAccessToken);
+}
+exports.removeEyevinnChannelEngineBridgeInstance = removeEyevinnChannelEngineBridgeInstance;
+/**
+ * Get a Channel Engine Bridge instance
+ *
+ * @description Channel Engine Bridge enables seamless pushing of FAST channels from FAST Channel Engine to distribution platforms such as AWS MediaPackage and simplifies the process of pushing channels to a wide range of distribution networks.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the channel-engine-bridge to be retrieved
+ * @returns {EyevinnChannelEngineBridge} - Service instance
+ */
+async function getEyevinnChannelEngineBridgeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-channel-engine-bridge');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-channel-engine-bridge', name, serviceAccessToken);
+}
+exports.getEyevinnChannelEngineBridgeInstance = getEyevinnChannelEngineBridgeInstance;
+//# sourceMappingURL=eyevinn-channel-engine-bridge.js.map
+
+/***/ }),
+
+/***/ 1213:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnChaosStreamProxyInstance = exports.removeEyevinnChaosStreamProxyInstance = exports.createEyevinnChaosStreamProxyInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Chaos Stream Proxy instance
+ *
+ * @description Chaos Stream Proxy is an open-source tool designed to simulate network impairments in video streaming environments. It acts as a proxy between the client and the streaming server, allowing developers and QA engineers to introduce various network conditions such as latency, jitter, and packet loss to test and improve the resilience and performance of streaming applications. This tool is crucial for ensuring a smooth streaming experience under different network scenarios, making it an invaluable asset for optimizing video delivery in real-world conditions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnChaosStreamProxyConfig}} body - Service instance configuration
+ * @returns {EyevinnChaosStreamProxy} - Service instance
+ * @example
+ * import { Context, createEyevinnChaosStreamProxyInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnChaosStreamProxyInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnChaosStreamProxyInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-chaos-stream-proxy');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-chaos-stream-proxy', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-chaos-stream-proxy', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnChaosStreamProxyInstance = createEyevinnChaosStreamProxyInstance;
+/**
+ * Remove a Chaos Stream Proxy instance
+ *
+ * @description Chaos Stream Proxy is an open-source tool designed to simulate network impairments in video streaming environments. It acts as a proxy between the client and the streaming server, allowing developers and QA engineers to introduce various network conditions such as latency, jitter, and packet loss to test and improve the resilience and performance of streaming applications. This tool is crucial for ensuring a smooth streaming experience under different network scenarios, making it an invaluable asset for optimizing video delivery in real-world conditions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the chaos-stream-proxy to be removed
+ */
+async function removeEyevinnChaosStreamProxyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-chaos-stream-proxy');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-chaos-stream-proxy', name, serviceAccessToken);
+}
+exports.removeEyevinnChaosStreamProxyInstance = removeEyevinnChaosStreamProxyInstance;
+/**
+ * Get a Chaos Stream Proxy instance
+ *
+ * @description Chaos Stream Proxy is an open-source tool designed to simulate network impairments in video streaming environments. It acts as a proxy between the client and the streaming server, allowing developers and QA engineers to introduce various network conditions such as latency, jitter, and packet loss to test and improve the resilience and performance of streaming applications. This tool is crucial for ensuring a smooth streaming experience under different network scenarios, making it an invaluable asset for optimizing video delivery in real-world conditions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the chaos-stream-proxy to be retrieved
+ * @returns {EyevinnChaosStreamProxy} - Service instance
+ */
+async function getEyevinnChaosStreamProxyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-chaos-stream-proxy');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-chaos-stream-proxy', name, serviceAccessToken);
+}
+exports.getEyevinnChaosStreamProxyInstance = getEyevinnChaosStreamProxyInstance;
+//# sourceMappingURL=eyevinn-chaos-stream-proxy.js.map
+
+/***/ }),
+
+/***/ 8475:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnContinueWatchingApiInstance = exports.removeEyevinnContinueWatchingApiInstance = exports.createEyevinnContinueWatchingApiInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Continue Watching Service instance
+ *
+ * @description A user of a streaming service expects that they can pick up where they left on any of their devices. To handle that you would need to develop a service with endpoints for the application to write and read from. This open source cloud component take care of that and all you need is to have a Redis database running on Redis Cloud for example.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnContinueWatchingApiConfig}} body - Service instance configuration
+ * @returns {EyevinnContinueWatchingApi} - Service instance
+ * @example
+ * import { Context, createEyevinnContinueWatchingApiInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnContinueWatchingApiInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnContinueWatchingApiInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-continue-watching-api');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-continue-watching-api', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-continue-watching-api', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnContinueWatchingApiInstance = createEyevinnContinueWatchingApiInstance;
+/**
+ * Remove a Continue Watching Service instance
+ *
+ * @description A user of a streaming service expects that they can pick up where they left on any of their devices. To handle that you would need to develop a service with endpoints for the application to write and read from. This open source cloud component take care of that and all you need is to have a Redis database running on Redis Cloud for example.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be removed
+ */
+async function removeEyevinnContinueWatchingApiInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-continue-watching-api');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-continue-watching-api', name, serviceAccessToken);
+}
+exports.removeEyevinnContinueWatchingApiInstance = removeEyevinnContinueWatchingApiInstance;
+/**
+ * Get a Continue Watching Service instance
+ *
+ * @description A user of a streaming service expects that they can pick up where they left on any of their devices. To handle that you would need to develop a service with endpoints for the application to write and read from. This open source cloud component take care of that and all you need is to have a Redis database running on Redis Cloud for example.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the service to be retrieved
+ * @returns {EyevinnContinueWatchingApi} - Service instance
+ */
+async function getEyevinnContinueWatchingApiInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-continue-watching-api');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-continue-watching-api', name, serviceAccessToken);
+}
+exports.getEyevinnContinueWatchingApiInstance = getEyevinnContinueWatchingApiInstance;
+//# sourceMappingURL=eyevinn-continue-watching-api.js.map
+
+/***/ }),
+
+/***/ 755:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnDockerTestsrcHlsLiveInstance = exports.removeEyevinnDockerTestsrcHlsLiveInstance = exports.createEyevinnDockerTestsrcHlsLiveInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Test Source HLS Live instance
+ *
+ * @description Effortlessly create live HLS test streams with the docker-testsrc-hls-live image. Powered by FFmpeg, it's a must-have for developers crafting and testing video applications in real-time streaming environments.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnDockerTestsrcHlsLiveConfig}} body - Service instance configuration
+ * @returns {EyevinnDockerTestsrcHlsLive} - Service instance
+ * @example
+ * import { Context, createEyevinnDockerTestsrcHlsLiveInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnDockerTestsrcHlsLiveInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnDockerTestsrcHlsLiveInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-docker-testsrc-hls-live');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-docker-testsrc-hls-live', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-docker-testsrc-hls-live', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnDockerTestsrcHlsLiveInstance = createEyevinnDockerTestsrcHlsLiveInstance;
+/**
+ * Remove a Test Source HLS Live instance
+ *
+ * @description Effortlessly create live HLS test streams with the docker-testsrc-hls-live image. Powered by FFmpeg, it's a must-have for developers crafting and testing video applications in real-time streaming environments.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the testsource to be removed
+ */
+async function removeEyevinnDockerTestsrcHlsLiveInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-docker-testsrc-hls-live');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-docker-testsrc-hls-live', name, serviceAccessToken);
+}
+exports.removeEyevinnDockerTestsrcHlsLiveInstance = removeEyevinnDockerTestsrcHlsLiveInstance;
+/**
+ * Get a Test Source HLS Live instance
+ *
+ * @description Effortlessly create live HLS test streams with the docker-testsrc-hls-live image. Powered by FFmpeg, it's a must-have for developers crafting and testing video applications in real-time streaming environments.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the testsource to be retrieved
+ * @returns {EyevinnDockerTestsrcHlsLive} - Service instance
+ */
+async function getEyevinnDockerTestsrcHlsLiveInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-docker-testsrc-hls-live');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-docker-testsrc-hls-live', name, serviceAccessToken);
+}
+exports.getEyevinnDockerTestsrcHlsLiveInstance = getEyevinnDockerTestsrcHlsLiveInstance;
+//# sourceMappingURL=eyevinn-docker-testsrc-hls-live.js.map
+
+/***/ }),
+
+/***/ 2548:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnEncoreCallbackListenerInstance = exports.removeEyevinnEncoreCallbackListenerInstance = exports.createEyevinnEncoreCallbackListenerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Encore Callback Listener instance
+ *
+ * @description Encore callback listener is a powerful HTTP server that listens for successful job callbacks, posting jobId and Url on a redis queue. Fully customizable with environment variables. Enhance your project efficiency now! Contact sales@eyevinn.se for further details.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnEncoreCallbackListenerConfig}} body - Service instance configuration
+ * @returns {EyevinnEncoreCallbackListener} - Service instance
+ * @example
+ * import { Context, createEyevinnEncoreCallbackListenerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnEncoreCallbackListenerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnEncoreCallbackListenerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-callback-listener');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-encore-callback-listener', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-encore-callback-listener', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnEncoreCallbackListenerInstance = createEyevinnEncoreCallbackListenerInstance;
+/**
+ * Remove a Encore Callback Listener instance
+ *
+ * @description Encore callback listener is a powerful HTTP server that listens for successful job callbacks, posting jobId and Url on a redis queue. Fully customizable with environment variables. Enhance your project efficiency now! Contact sales@eyevinn.se for further details.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the callback to be removed
+ */
+async function removeEyevinnEncoreCallbackListenerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-callback-listener');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-encore-callback-listener', name, serviceAccessToken);
+}
+exports.removeEyevinnEncoreCallbackListenerInstance = removeEyevinnEncoreCallbackListenerInstance;
+/**
+ * Get a Encore Callback Listener instance
+ *
+ * @description Encore callback listener is a powerful HTTP server that listens for successful job callbacks, posting jobId and Url on a redis queue. Fully customizable with environment variables. Enhance your project efficiency now! Contact sales@eyevinn.se for further details.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the callback to be retrieved
+ * @returns {EyevinnEncoreCallbackListener} - Service instance
+ */
+async function getEyevinnEncoreCallbackListenerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-callback-listener');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-encore-callback-listener', name, serviceAccessToken);
+}
+exports.getEyevinnEncoreCallbackListenerInstance = getEyevinnEncoreCallbackListenerInstance;
+//# sourceMappingURL=eyevinn-encore-callback-listener.js.map
+
+/***/ }),
+
+/***/ 1238:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnEncorePackagerInstance = exports.removeEyevinnEncorePackagerInstance = exports.createEyevinnEncorePackagerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Encore Packager instance
+ *
+ * @description Enhance your transcoding workflow with Encore packager! Run as a service, listen for messages on redis queue, and customize packaging events. Boost productivity with this versatile tool.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnEncorePackagerConfig}} body - Service instance configuration
+ * @returns {EyevinnEncorePackager} - Service instance
+ * @example
+ * import { Context, createEyevinnEncorePackagerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnEncorePackagerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnEncorePackagerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-packager');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-encore-packager', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-encore-packager', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnEncorePackagerInstance = createEyevinnEncorePackagerInstance;
+/**
+ * Remove a Encore Packager instance
+ *
+ * @description Enhance your transcoding workflow with Encore packager! Run as a service, listen for messages on redis queue, and customize packaging events. Boost productivity with this versatile tool.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the packager to be removed
+ */
+async function removeEyevinnEncorePackagerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-packager');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-encore-packager', name, serviceAccessToken);
+}
+exports.removeEyevinnEncorePackagerInstance = removeEyevinnEncorePackagerInstance;
+/**
+ * Get a Encore Packager instance
+ *
+ * @description Enhance your transcoding workflow with Encore packager! Run as a service, listen for messages on redis queue, and customize packaging events. Boost productivity with this versatile tool.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the packager to be retrieved
+ * @returns {EyevinnEncorePackager} - Service instance
+ */
+async function getEyevinnEncorePackagerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-packager');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-encore-packager', name, serviceAccessToken);
+}
+exports.getEyevinnEncorePackagerInstance = getEyevinnEncorePackagerInstance;
+//# sourceMappingURL=eyevinn-encore-packager.js.map
+
+/***/ }),
+
+/***/ 923:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnEncoreTransferInstance = exports.removeEyevinnEncoreTransferInstance = exports.createEyevinnEncoreTransferInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Encore Transfer instance
+ *
+ * @description Introducing Encore Transfer - the ultimate service for seamless output transfer in a video processing pipeline. With easy installation and essential environment variables, this service is a game-changer for Open Source Cloud users. Dive into our comprehensive documentation and join our supportive community on Slack. Don't miss out on this opportunity to revolutionize your video workflow with Eyevinn Technology's innovative solution. Get in touch with us for further customization and support options!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnEncoreTransferConfig}} body - Service instance configuration
+ * @returns {EyevinnEncoreTransfer} - Service instance
+ * @example
+ * import { Context, createEyevinnEncoreTransferInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnEncoreTransferInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnEncoreTransferInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-transfer');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-encore-transfer', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-encore-transfer', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnEncoreTransferInstance = createEyevinnEncoreTransferInstance;
+/**
+ * Remove a Encore Transfer instance
+ *
+ * @description Introducing Encore Transfer - the ultimate service for seamless output transfer in a video processing pipeline. With easy installation and essential environment variables, this service is a game-changer for Open Source Cloud users. Dive into our comprehensive documentation and join our supportive community on Slack. Don't miss out on this opportunity to revolutionize your video workflow with Eyevinn Technology's innovative solution. Get in touch with us for further customization and support options!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the encore-transfer to be removed
+ */
+async function removeEyevinnEncoreTransferInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-transfer');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-encore-transfer', name, serviceAccessToken);
+}
+exports.removeEyevinnEncoreTransferInstance = removeEyevinnEncoreTransferInstance;
+/**
+ * Get a Encore Transfer instance
+ *
+ * @description Introducing Encore Transfer - the ultimate service for seamless output transfer in a video processing pipeline. With easy installation and essential environment variables, this service is a game-changer for Open Source Cloud users. Dive into our comprehensive documentation and join our supportive community on Slack. Don't miss out on this opportunity to revolutionize your video workflow with Eyevinn Technology's innovative solution. Get in touch with us for further customization and support options!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the encore-transfer to be retrieved
+ * @returns {EyevinnEncoreTransfer} - Service instance
+ */
+async function getEyevinnEncoreTransferInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-encore-transfer');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-encore-transfer', name, serviceAccessToken);
+}
+exports.getEyevinnEncoreTransferInstance = getEyevinnEncoreTransferInstance;
+//# sourceMappingURL=eyevinn-encore-transfer.js.map
+
+/***/ }),
+
+/***/ 2152:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnFunctionProbeInstance = exports.removeEyevinnFunctionProbeInstance = exports.createEyevinnFunctionProbeInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Media Probe instance
+ *
+ * @description A serverless media function to obtain media information for a media file or media stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnFunctionProbeConfig}} body - Service instance configuration
+ * @returns {EyevinnFunctionProbe} - Service instance
+ * @example
+ * import { Context, createEyevinnFunctionProbeInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnFunctionProbeInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnFunctionProbeInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-probe');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-function-probe', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-function-probe', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnFunctionProbeInstance = createEyevinnFunctionProbeInstance;
+/**
+ * Remove a Media Probe instance
+ *
+ * @description A serverless media function to obtain media information for a media file or media stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the probe to be removed
+ */
+async function removeEyevinnFunctionProbeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-probe');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-function-probe', name, serviceAccessToken);
+}
+exports.removeEyevinnFunctionProbeInstance = removeEyevinnFunctionProbeInstance;
+/**
+ * Get a Media Probe instance
+ *
+ * @description A serverless media function to obtain media information for a media file or media stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the probe to be retrieved
+ * @returns {EyevinnFunctionProbe} - Service instance
+ */
+async function getEyevinnFunctionProbeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-probe');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-function-probe', name, serviceAccessToken);
+}
+exports.getEyevinnFunctionProbeInstance = getEyevinnFunctionProbeInstance;
+//# sourceMappingURL=eyevinn-function-probe.js.map
+
+/***/ }),
+
+/***/ 6949:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnFunctionScenesInstance = exports.removeEyevinnFunctionScenesInstance = exports.createEyevinnFunctionScenesInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Scene Detect Media Function instance
+ *
+ * @description A serverless media function to detect scene changes and extract keyframes in a video file or a stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnFunctionScenesConfig}} body - Service instance configuration
+ * @returns {EyevinnFunctionScenes} - Service instance
+ * @example
+ * import { Context, createEyevinnFunctionScenesInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnFunctionScenesInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnFunctionScenesInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-scenes');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-function-scenes', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-function-scenes', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnFunctionScenesInstance = createEyevinnFunctionScenesInstance;
+/**
+ * Remove a Scene Detect Media Function instance
+ *
+ * @description A serverless media function to detect scene changes and extract keyframes in a video file or a stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mediafunction to be removed
+ */
+async function removeEyevinnFunctionScenesInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-scenes');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-function-scenes', name, serviceAccessToken);
+}
+exports.removeEyevinnFunctionScenesInstance = removeEyevinnFunctionScenesInstance;
+/**
+ * Get a Scene Detect Media Function instance
+ *
+ * @description A serverless media function to detect scene changes and extract keyframes in a video file or a stream.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mediafunction to be retrieved
+ * @returns {EyevinnFunctionScenes} - Service instance
+ */
+async function getEyevinnFunctionScenesInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-scenes');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-function-scenes', name, serviceAccessToken);
+}
+exports.getEyevinnFunctionScenesInstance = getEyevinnFunctionScenesInstance;
+//# sourceMappingURL=eyevinn-function-scenes.js.map
+
+/***/ }),
+
+/***/ 1124:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnFunctionTrimInstance = exports.removeEyevinnFunctionTrimInstance = exports.createEyevinnFunctionTrimInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Trim Media instance
+ *
+ * @description A serverless media function to trim single media file or an ABR bundle of media files and upload the output to an S3 bucket.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnFunctionTrimConfig}} body - Service instance configuration
+ * @returns {EyevinnFunctionTrim} - Service instance
+ * @example
+ * import { Context, createEyevinnFunctionTrimInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnFunctionTrimInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnFunctionTrimInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-trim');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-function-trim', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-function-trim', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnFunctionTrimInstance = createEyevinnFunctionTrimInstance;
+/**
+ * Remove a Trim Media instance
+ *
+ * @description A serverless media function to trim single media file or an ABR bundle of media files and upload the output to an S3 bucket.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mediafunction to be removed
+ */
+async function removeEyevinnFunctionTrimInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-trim');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-function-trim', name, serviceAccessToken);
+}
+exports.removeEyevinnFunctionTrimInstance = removeEyevinnFunctionTrimInstance;
+/**
+ * Get a Trim Media instance
+ *
+ * @description A serverless media function to trim single media file or an ABR bundle of media files and upload the output to an S3 bucket.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the mediafunction to be retrieved
+ * @returns {EyevinnFunctionTrim} - Service instance
+ */
+async function getEyevinnFunctionTrimInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-function-trim');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-function-trim', name, serviceAccessToken);
+}
+exports.getEyevinnFunctionTrimInstance = getEyevinnFunctionTrimInstance;
+//# sourceMappingURL=eyevinn-function-trim.js.map
+
+/***/ }),
+
+/***/ 6913:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnHlsMonitorInstance = exports.removeEyevinnHlsMonitorInstance = exports.createEyevinnHlsMonitorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new HLS Stream Monitor instance
+ *
+ * @description Service to monitor one or more HLS-streams for manifest errors and inconsistencies.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnHlsMonitorConfig}} body - Service instance configuration
+ * @returns {EyevinnHlsMonitor} - Service instance
+ * @example
+ * import { Context, createEyevinnHlsMonitorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnHlsMonitorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnHlsMonitorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-hls-monitor');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-hls-monitor', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-hls-monitor', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnHlsMonitorInstance = createEyevinnHlsMonitorInstance;
+/**
+ * Remove a HLS Stream Monitor instance
+ *
+ * @description Service to monitor one or more HLS-streams for manifest errors and inconsistencies.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the monitor to be removed
+ */
+async function removeEyevinnHlsMonitorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-hls-monitor');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-hls-monitor', name, serviceAccessToken);
+}
+exports.removeEyevinnHlsMonitorInstance = removeEyevinnHlsMonitorInstance;
+/**
+ * Get a HLS Stream Monitor instance
+ *
+ * @description Service to monitor one or more HLS-streams for manifest errors and inconsistencies.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the monitor to be retrieved
+ * @returns {EyevinnHlsMonitor} - Service instance
+ */
+async function getEyevinnHlsMonitorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-hls-monitor');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-hls-monitor', name, serviceAccessToken);
+}
+exports.getEyevinnHlsMonitorInstance = getEyevinnHlsMonitorInstance;
+//# sourceMappingURL=eyevinn-hls-monitor.js.map
+
+/***/ }),
+
+/***/ 8314:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnIntercomManagerInstance = exports.removeEyevinnIntercomManagerInstance = exports.createEyevinnIntercomManagerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Intercom instance
+ *
+ * @description Open Source Intercom Solution providing production-grade audio quality and real-time latency. Powered by Symphony Media Bridge open source media server.
+
+Join our Slack community for support and customization. Contact sales@eyevinn.se for further development and support. Visit Eyevinn Technology for innovative video solutions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnIntercomManagerConfig}} body - Service instance configuration
+ * @returns {EyevinnIntercomManager} - Service instance
+ * @example
+ * import { Context, createEyevinnIntercomManagerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnIntercomManagerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnIntercomManagerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-intercom-manager');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-intercom-manager', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-intercom-manager', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnIntercomManagerInstance = createEyevinnIntercomManagerInstance;
+/**
+ * Remove a Intercom instance
+ *
+ * @description Open Source Intercom Solution providing production-grade audio quality and real-time latency. Powered by Symphony Media Bridge open source media server.
+
+Join our Slack community for support and customization. Contact sales@eyevinn.se for further development and support. Visit Eyevinn Technology for innovative video solutions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the system to be removed
+ */
+async function removeEyevinnIntercomManagerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-intercom-manager');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-intercom-manager', name, serviceAccessToken);
+}
+exports.removeEyevinnIntercomManagerInstance = removeEyevinnIntercomManagerInstance;
+/**
+ * Get a Intercom instance
+ *
+ * @description Open Source Intercom Solution providing production-grade audio quality and real-time latency. Powered by Symphony Media Bridge open source media server.
+
+Join our Slack community for support and customization. Contact sales@eyevinn.se for further development and support. Visit Eyevinn Technology for innovative video solutions.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the system to be retrieved
+ * @returns {EyevinnIntercomManager} - Service instance
+ */
+async function getEyevinnIntercomManagerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-intercom-manager');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-intercom-manager', name, serviceAccessToken);
+}
+exports.getEyevinnIntercomManagerInstance = getEyevinnIntercomManagerInstance;
+//# sourceMappingURL=eyevinn-intercom-manager.js.map
+
+/***/ }),
+
+/***/ 1232:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnLambdaStitchInstance = exports.removeEyevinnLambdaStitchInstance = exports.createEyevinnLambdaStitchInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new HLS VOD Stitcher instance
+ *
+ * @description A proxy to insert ads in an HLS VOD either using manifest manipulation or HLS interstitials
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnLambdaStitchConfig}} body - Service instance configuration
+ * @returns {EyevinnLambdaStitch} - Service instance
+ * @example
+ * import { Context, createEyevinnLambdaStitchInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnLambdaStitchInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnLambdaStitchInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-lambda-stitch');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-lambda-stitch', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-lambda-stitch', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnLambdaStitchInstance = createEyevinnLambdaStitchInstance;
+/**
+ * Remove a HLS VOD Stitcher instance
+ *
+ * @description A proxy to insert ads in an HLS VOD either using manifest manipulation or HLS interstitials
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the stitcher to be removed
+ */
+async function removeEyevinnLambdaStitchInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-lambda-stitch');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-lambda-stitch', name, serviceAccessToken);
+}
+exports.removeEyevinnLambdaStitchInstance = removeEyevinnLambdaStitchInstance;
+/**
+ * Get a HLS VOD Stitcher instance
+ *
+ * @description A proxy to insert ads in an HLS VOD either using manifest manipulation or HLS interstitials
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the stitcher to be retrieved
+ * @returns {EyevinnLambdaStitch} - Service instance
+ */
+async function getEyevinnLambdaStitchInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-lambda-stitch');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-lambda-stitch', name, serviceAccessToken);
+}
+exports.getEyevinnLambdaStitchInstance = getEyevinnLambdaStitchInstance;
+//# sourceMappingURL=eyevinn-lambda-stitch.js.map
+
+/***/ }),
+
+/***/ 8751:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnLiveEncodingInstance = exports.removeEyevinnLiveEncodingInstance = exports.createEyevinnLiveEncodingInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Eyevinn Live Encoding instance
+ *
+ * @description Transform your live streaming with Eyevinn Live Encoding: Open-source, ffmpeg-based, and ready for HLS & MPEG-DASH. Streamline now, CDN-ready.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnLiveEncodingConfig}} body - Service instance configuration
+ * @returns {EyevinnLiveEncoding} - Service instance
+ * @example
+ * import { Context, createEyevinnLiveEncodingInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnLiveEncodingInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnLiveEncodingInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-live-encoding');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-live-encoding', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-live-encoding', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnLiveEncodingInstance = createEyevinnLiveEncodingInstance;
+/**
+ * Remove a Eyevinn Live Encoding instance
+ *
+ * @description Transform your live streaming with Eyevinn Live Encoding: Open-source, ffmpeg-based, and ready for HLS & MPEG-DASH. Streamline now, CDN-ready.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the encoder to be removed
+ */
+async function removeEyevinnLiveEncodingInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-live-encoding');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-live-encoding', name, serviceAccessToken);
+}
+exports.removeEyevinnLiveEncodingInstance = removeEyevinnLiveEncodingInstance;
+/**
+ * Get a Eyevinn Live Encoding instance
+ *
+ * @description Transform your live streaming with Eyevinn Live Encoding: Open-source, ffmpeg-based, and ready for HLS & MPEG-DASH. Streamline now, CDN-ready.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the encoder to be retrieved
+ * @returns {EyevinnLiveEncoding} - Service instance
+ */
+async function getEyevinnLiveEncodingInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-live-encoding');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-live-encoding', name, serviceAccessToken);
+}
+exports.getEyevinnLiveEncodingInstance = getEyevinnLiveEncodingInstance;
+//# sourceMappingURL=eyevinn-live-encoding.js.map
+
+/***/ }),
+
+/***/ 1556:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnPdsAdminInstance = exports.removeEyevinnPdsAdminInstance = exports.createEyevinnPdsAdminInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new PDS Admin instance
+ *
+ * @description Effortlessly manage your Bluesky Personal Data Server with our intuitive admin tool. Optimize your data environment locally or in the cloud with seamless installation and dependable performance.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnPdsAdminConfig}} body - Service instance configuration
+ * @returns {EyevinnPdsAdmin} - Service instance
+ * @example
+ * import { Context, createEyevinnPdsAdminInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnPdsAdminInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnPdsAdminInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-pds-admin');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-pds-admin', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-pds-admin', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnPdsAdminInstance = createEyevinnPdsAdminInstance;
+/**
+ * Remove a PDS Admin instance
+ *
+ * @description Effortlessly manage your Bluesky Personal Data Server with our intuitive admin tool. Optimize your data environment locally or in the cloud with seamless installation and dependable performance.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the app to be removed
+ */
+async function removeEyevinnPdsAdminInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-pds-admin');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-pds-admin', name, serviceAccessToken);
+}
+exports.removeEyevinnPdsAdminInstance = removeEyevinnPdsAdminInstance;
+/**
+ * Get a PDS Admin instance
+ *
+ * @description Effortlessly manage your Bluesky Personal Data Server with our intuitive admin tool. Optimize your data environment locally or in the cloud with seamless installation and dependable performance.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the app to be retrieved
+ * @returns {EyevinnPdsAdmin} - Service instance
+ */
+async function getEyevinnPdsAdminInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-pds-admin');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-pds-admin', name, serviceAccessToken);
+}
+exports.getEyevinnPdsAdminInstance = getEyevinnPdsAdminInstance;
+//# sourceMappingURL=eyevinn-pds-admin.js.map
+
+/***/ }),
+
+/***/ 7985:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnPreviewHlsServiceInstance = exports.removeEyevinnPreviewHlsServiceInstance = exports.createEyevinnPreviewHlsServiceInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new HLS Preview Generator instance
+ *
+ * @description A service to generate a preview video (mp4) or an image (png) from an HLS stream
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnPreviewHlsServiceConfig}} body - Service instance configuration
+ * @returns {EyevinnPreviewHlsService} - Service instance
+ * @example
+ * import { Context, createEyevinnPreviewHlsServiceInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnPreviewHlsServiceInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnPreviewHlsServiceInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-preview-hls-service');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-preview-hls-service', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-preview-hls-service', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnPreviewHlsServiceInstance = createEyevinnPreviewHlsServiceInstance;
+/**
+ * Remove a HLS Preview Generator instance
+ *
+ * @description A service to generate a preview video (mp4) or an image (png) from an HLS stream
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the preview-generator to be removed
+ */
+async function removeEyevinnPreviewHlsServiceInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-preview-hls-service');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-preview-hls-service', name, serviceAccessToken);
+}
+exports.removeEyevinnPreviewHlsServiceInstance = removeEyevinnPreviewHlsServiceInstance;
+/**
+ * Get a HLS Preview Generator instance
+ *
+ * @description A service to generate a preview video (mp4) or an image (png) from an HLS stream
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the preview-generator to be retrieved
+ * @returns {EyevinnPreviewHlsService} - Service instance
+ */
+async function getEyevinnPreviewHlsServiceInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-preview-hls-service');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-preview-hls-service', name, serviceAccessToken);
+}
+exports.getEyevinnPreviewHlsServiceInstance = getEyevinnPreviewHlsServiceInstance;
+//# sourceMappingURL=eyevinn-preview-hls-service.js.map
+
+/***/ }),
+
+/***/ 1836:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnQrGeneratorInstance = exports.removeEyevinnQrGeneratorInstance = exports.createEyevinnQrGeneratorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new QR Code Generator instance
+ *
+ * @description Effortlessly create and customize QR codes with dynamic text and logos. Perfect for projects requiring quick updates. Launch your instance and deploy multiple codes seamlessly on the Open Source Cloud.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnQrGeneratorConfig}} body - Service instance configuration
+ * @returns {EyevinnQrGenerator} - Service instance
+ * @example
+ * import { Context, createEyevinnQrGeneratorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnQrGeneratorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnQrGeneratorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-qr-generator');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-qr-generator', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-qr-generator', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnQrGeneratorInstance = createEyevinnQrGeneratorInstance;
+/**
+ * Remove a QR Code Generator instance
+ *
+ * @description Effortlessly create and customize QR codes with dynamic text and logos. Perfect for projects requiring quick updates. Launch your instance and deploy multiple codes seamlessly on the Open Source Cloud.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the qr-generator to be removed
+ */
+async function removeEyevinnQrGeneratorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-qr-generator');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-qr-generator', name, serviceAccessToken);
+}
+exports.removeEyevinnQrGeneratorInstance = removeEyevinnQrGeneratorInstance;
+/**
+ * Get a QR Code Generator instance
+ *
+ * @description Effortlessly create and customize QR codes with dynamic text and logos. Perfect for projects requiring quick updates. Launch your instance and deploy multiple codes seamlessly on the Open Source Cloud.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the qr-generator to be retrieved
+ * @returns {EyevinnQrGenerator} - Service instance
+ */
+async function getEyevinnQrGeneratorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-qr-generator');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-qr-generator', name, serviceAccessToken);
+}
+exports.getEyevinnQrGeneratorInstance = getEyevinnQrGeneratorInstance;
+//# sourceMappingURL=eyevinn-qr-generator.js.map
+
+/***/ }),
+
+/***/ 7360:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnRustImageProcessorInstance = exports.removeEyevinnRustImageProcessorInstance = exports.createEyevinnRustImageProcessorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Simple Image Resizer instance
+ *
+ * @description An efficient and easy to use image resizer offering an endpoint for scaling image on the fly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnRustImageProcessorConfig}} body - Service instance configuration
+ * @returns {EyevinnRustImageProcessor} - Service instance
+ * @example
+ * import { Context, createEyevinnRustImageProcessorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnRustImageProcessorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnRustImageProcessorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-rust-image-processor');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-rust-image-processor', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-rust-image-processor', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnRustImageProcessorInstance = createEyevinnRustImageProcessorInstance;
+/**
+ * Remove a Simple Image Resizer instance
+ *
+ * @description An efficient and easy to use image resizer offering an endpoint for scaling image on the fly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the resizer to be removed
+ */
+async function removeEyevinnRustImageProcessorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-rust-image-processor');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-rust-image-processor', name, serviceAccessToken);
+}
+exports.removeEyevinnRustImageProcessorInstance = removeEyevinnRustImageProcessorInstance;
+/**
+ * Get a Simple Image Resizer instance
+ *
+ * @description An efficient and easy to use image resizer offering an endpoint for scaling image on the fly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the resizer to be retrieved
+ * @returns {EyevinnRustImageProcessor} - Service instance
+ */
+async function getEyevinnRustImageProcessorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-rust-image-processor');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-rust-image-processor', name, serviceAccessToken);
+}
+exports.getEyevinnRustImageProcessorInstance = getEyevinnRustImageProcessorInstance;
+//# sourceMappingURL=eyevinn-rust-image-processor.js.map
+
+/***/ }),
+
+/***/ 8672:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnScheduleServiceInstance = exports.removeEyevinnScheduleServiceInstance = exports.createEyevinnScheduleServiceInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new FAST Engine Schedule Service instance
+ *
+ * @description A modular service to automatically populate schedules for FAST Engine channels. Uses AWS Dynamo DB as database.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnScheduleServiceConfig}} body - Service instance configuration
+ * @returns {EyevinnScheduleService} - Service instance
+ * @example
+ * import { Context, createEyevinnScheduleServiceInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnScheduleServiceInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnScheduleServiceInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-schedule-service');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-schedule-service', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-schedule-service', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnScheduleServiceInstance = createEyevinnScheduleServiceInstance;
+/**
+ * Remove a FAST Engine Schedule Service instance
+ *
+ * @description A modular service to automatically populate schedules for FAST Engine channels. Uses AWS Dynamo DB as database.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the scheduler to be removed
+ */
+async function removeEyevinnScheduleServiceInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-schedule-service');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-schedule-service', name, serviceAccessToken);
+}
+exports.removeEyevinnScheduleServiceInstance = removeEyevinnScheduleServiceInstance;
+/**
+ * Get a FAST Engine Schedule Service instance
+ *
+ * @description A modular service to automatically populate schedules for FAST Engine channels. Uses AWS Dynamo DB as database.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the scheduler to be retrieved
+ * @returns {EyevinnScheduleService} - Service instance
+ */
+async function getEyevinnScheduleServiceInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-schedule-service');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-schedule-service', name, serviceAccessToken);
+}
+exports.getEyevinnScheduleServiceInstance = getEyevinnScheduleServiceInstance;
+//# sourceMappingURL=eyevinn-schedule-service.js.map
+
+/***/ }),
+
+/***/ 5104:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnSgaiAdProxyInstance = exports.removeEyevinnSgaiAdProxyInstance = exports.createEyevinnSgaiAdProxyInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new SGAI Proxy instance
+ *
+ * @description Boost viewer engagement with our Server-Guided Ad Insertion Proxy! Automatically embed ads into video streams with precision timing. Enhance monetization effortlessly while maintaining a seamless user experience.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnSgaiAdProxyConfig}} body - Service instance configuration
+ * @returns {EyevinnSgaiAdProxy} - Service instance
+ * @example
+ * import { Context, createEyevinnSgaiAdProxyInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnSgaiAdProxyInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnSgaiAdProxyInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-sgai-ad-proxy');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-sgai-ad-proxy', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-sgai-ad-proxy', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnSgaiAdProxyInstance = createEyevinnSgaiAdProxyInstance;
+/**
+ * Remove a SGAI Proxy instance
+ *
+ * @description Boost viewer engagement with our Server-Guided Ad Insertion Proxy! Automatically embed ads into video streams with precision timing. Enhance monetization effortlessly while maintaining a seamless user experience.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the proxy to be removed
+ */
+async function removeEyevinnSgaiAdProxyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-sgai-ad-proxy');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-sgai-ad-proxy', name, serviceAccessToken);
+}
+exports.removeEyevinnSgaiAdProxyInstance = removeEyevinnSgaiAdProxyInstance;
+/**
+ * Get a SGAI Proxy instance
+ *
+ * @description Boost viewer engagement with our Server-Guided Ad Insertion Proxy! Automatically embed ads into video streams with precision timing. Enhance monetization effortlessly while maintaining a seamless user experience.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the proxy to be retrieved
+ * @returns {EyevinnSgaiAdProxy} - Service instance
+ */
+async function getEyevinnSgaiAdProxyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-sgai-ad-proxy');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-sgai-ad-proxy', name, serviceAccessToken);
+}
+exports.getEyevinnSgaiAdProxyInstance = getEyevinnSgaiAdProxyInstance;
+//# sourceMappingURL=eyevinn-sgai-ad-proxy.js.map
+
+/***/ }),
+
+/***/ 5528:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnSmbWhipBridgeInstance = exports.removeEyevinnSmbWhipBridgeInstance = exports.createEyevinnSmbWhipBridgeInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Symphony Media Bridge WHIP Gateway instance
+ *
+ * @description Elevate your video streaming with SMB WHIP Bridge! Seamlessly integrate WHIP clients with Symphony Media Bridge SFU for superior media streams.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnSmbWhipBridgeConfig}} body - Service instance configuration
+ * @returns {EyevinnSmbWhipBridge} - Service instance
+ * @example
+ * import { Context, createEyevinnSmbWhipBridgeInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnSmbWhipBridgeInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnSmbWhipBridgeInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-smb-whip-bridge');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-smb-whip-bridge', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-smb-whip-bridge', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnSmbWhipBridgeInstance = createEyevinnSmbWhipBridgeInstance;
+/**
+ * Remove a Symphony Media Bridge WHIP Gateway instance
+ *
+ * @description Elevate your video streaming with SMB WHIP Bridge! Seamlessly integrate WHIP clients with Symphony Media Bridge SFU for superior media streams.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the gateway to be removed
+ */
+async function removeEyevinnSmbWhipBridgeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-smb-whip-bridge');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-smb-whip-bridge', name, serviceAccessToken);
+}
+exports.removeEyevinnSmbWhipBridgeInstance = removeEyevinnSmbWhipBridgeInstance;
+/**
+ * Get a Symphony Media Bridge WHIP Gateway instance
+ *
+ * @description Elevate your video streaming with SMB WHIP Bridge! Seamlessly integrate WHIP clients with Symphony Media Bridge SFU for superior media streams.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the gateway to be retrieved
+ * @returns {EyevinnSmbWhipBridge} - Service instance
+ */
+async function getEyevinnSmbWhipBridgeInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-smb-whip-bridge');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-smb-whip-bridge', name, serviceAccessToken);
+}
+exports.getEyevinnSmbWhipBridgeInstance = getEyevinnSmbWhipBridgeInstance;
+//# sourceMappingURL=eyevinn-smb-whip-bridge.js.map
+
+/***/ }),
+
+/***/ 475:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnSrtWhepInstance = exports.removeEyevinnSrtWhepInstance = exports.createEyevinnSrtWhepInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new SRT WHEP Bridge instance
+ *
+ * @description SRT to WHEP application ingests MPEG-TS over SRT stream and outputs to WebRTC using WHEP signaling protocol, supporting MacOS and Ubuntu. No video transcoding, SDP offer/answer exchange focus, and compliance with popular production software. Get yours now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnSrtWhepConfig}} body - Service instance configuration
+ * @returns {EyevinnSrtWhep} - Service instance
+ * @example
+ * import { Context, createEyevinnSrtWhepInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnSrtWhepInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnSrtWhepInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-srt-whep');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-srt-whep', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-srt-whep', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnSrtWhepInstance = createEyevinnSrtWhepInstance;
+/**
+ * Remove a SRT WHEP Bridge instance
+ *
+ * @description SRT to WHEP application ingests MPEG-TS over SRT stream and outputs to WebRTC using WHEP signaling protocol, supporting MacOS and Ubuntu. No video transcoding, SDP offer/answer exchange focus, and compliance with popular production software. Get yours now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the bridge to be removed
+ */
+async function removeEyevinnSrtWhepInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-srt-whep');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-srt-whep', name, serviceAccessToken);
+}
+exports.removeEyevinnSrtWhepInstance = removeEyevinnSrtWhepInstance;
+/**
+ * Get a SRT WHEP Bridge instance
+ *
+ * @description SRT to WHEP application ingests MPEG-TS over SRT stream and outputs to WebRTC using WHEP signaling protocol, supporting MacOS and Ubuntu. No video transcoding, SDP offer/answer exchange focus, and compliance with popular production software. Get yours now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the bridge to be retrieved
+ * @returns {EyevinnSrtWhep} - Service instance
+ */
+async function getEyevinnSrtWhepInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-srt-whep');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-srt-whep', name, serviceAccessToken);
+}
+exports.getEyevinnSrtWhepInstance = getEyevinnSrtWhepInstance;
+//# sourceMappingURL=eyevinn-srt-whep.js.map
+
+/***/ }),
+
+/***/ 4250:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnTestAdserverInstance = exports.removeEyevinnTestAdserverInstance = exports.createEyevinnTestAdserverInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Test Adserver instance
+ *
+ * @description Eyevinn Test Adserver is the ultimate solution for testing CSAI/SSAI stitching and tracking implementation. Open source, easy to use, and flexible for various use cases. Get it now and experience seamless testing!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnTestAdserverConfig}} body - Service instance configuration
+ * @returns {EyevinnTestAdserver} - Service instance
+ * @example
+ * import { Context, createEyevinnTestAdserverInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnTestAdserverInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnTestAdserverInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-test-adserver');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-test-adserver', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-test-adserver', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnTestAdserverInstance = createEyevinnTestAdserverInstance;
+/**
+ * Remove a Test Adserver instance
+ *
+ * @description Eyevinn Test Adserver is the ultimate solution for testing CSAI/SSAI stitching and tracking implementation. Open source, easy to use, and flexible for various use cases. Get it now and experience seamless testing!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the test-adserver to be removed
+ */
+async function removeEyevinnTestAdserverInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-test-adserver');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-test-adserver', name, serviceAccessToken);
+}
+exports.removeEyevinnTestAdserverInstance = removeEyevinnTestAdserverInstance;
+/**
+ * Get a Test Adserver instance
+ *
+ * @description Eyevinn Test Adserver is the ultimate solution for testing CSAI/SSAI stitching and tracking implementation. Open source, easy to use, and flexible for various use cases. Get it now and experience seamless testing!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the test-adserver to be retrieved
+ * @returns {EyevinnTestAdserver} - Service instance
+ */
+async function getEyevinnTestAdserverInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-test-adserver');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-test-adserver', name, serviceAccessToken);
+}
+exports.getEyevinnTestAdserverInstance = getEyevinnTestAdserverInstance;
+//# sourceMappingURL=eyevinn-test-adserver.js.map
+
+/***/ }),
+
+/***/ 2503:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getEyevinnWrtcEgressInstance = exports.removeEyevinnWrtcEgressInstance = exports.createEyevinnWrtcEgressInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Symphony Media Bridge WHEP Gateway instance
+ *
+ * @description "Streamline your video services with Eyevinn's WebRTC Egress Endpoint Library. Perfect for standardized streaming with WHEP protocol. Enhance your Symphony Media Bridge connections now!"
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {EyevinnWrtcEgressConfig}} body - Service instance configuration
+ * @returns {EyevinnWrtcEgress} - Service instance
+ * @example
+ * import { Context, createEyevinnWrtcEgressInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createEyevinnWrtcEgressInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createEyevinnWrtcEgressInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-wrtc-egress');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'eyevinn-wrtc-egress', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('eyevinn-wrtc-egress', instance.name, ctx);
+    return instance;
+}
+exports.createEyevinnWrtcEgressInstance = createEyevinnWrtcEgressInstance;
+/**
+ * Remove a Symphony Media Bridge WHEP Gateway instance
+ *
+ * @description "Streamline your video services with Eyevinn's WebRTC Egress Endpoint Library. Perfect for standardized streaming with WHEP protocol. Enhance your Symphony Media Bridge connections now!"
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the gateway to be removed
+ */
+async function removeEyevinnWrtcEgressInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-wrtc-egress');
+    await (0, client_core_1.removeInstance)(ctx, 'eyevinn-wrtc-egress', name, serviceAccessToken);
+}
+exports.removeEyevinnWrtcEgressInstance = removeEyevinnWrtcEgressInstance;
+/**
+ * Get a Symphony Media Bridge WHEP Gateway instance
+ *
+ * @description "Streamline your video services with Eyevinn's WebRTC Egress Endpoint Library. Perfect for standardized streaming with WHEP protocol. Enhance your Symphony Media Bridge connections now!"
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the gateway to be retrieved
+ * @returns {EyevinnWrtcEgress} - Service instance
+ */
+async function getEyevinnWrtcEgressInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('eyevinn-wrtc-egress');
+    return await (0, client_core_1.getInstance)(ctx, 'eyevinn-wrtc-egress', name, serviceAccessToken);
+}
+exports.getEyevinnWrtcEgressInstance = getEyevinnWrtcEgressInstance;
+//# sourceMappingURL=eyevinn-wrtc-egress.js.map
+
+/***/ }),
+
+/***/ 6353:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getFlyimgFlyimgInstance = exports.removeFlyimgFlyimgInstance = exports.createFlyimgFlyimgInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new flyimg instance
+ *
+ * @description An application that allows you to resize, crop, and compress images on the fly.
+
+By default, Flyimg generates the AVIF image format (when the browser supports it) which provides superior compression compared to other formats.
+
+Additionally, Flyimg also generates the WebP format, along with the impressive MozJPEG compression algorithm to optimize images, other formats are supported also such as PNG and GIF.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {FlyimgFlyimgConfig}} body - Service instance configuration
+ * @returns {FlyimgFlyimg} - Service instance
+ * @example
+ * import { Context, createFlyimgFlyimgInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createFlyimgFlyimgInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createFlyimgFlyimgInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('flyimg-flyimg');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'flyimg-flyimg', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('flyimg-flyimg', instance.name, ctx);
+    return instance;
+}
+exports.createFlyimgFlyimgInstance = createFlyimgFlyimgInstance;
+/**
+ * Remove a flyimg instance
+ *
+ * @description An application that allows you to resize, crop, and compress images on the fly.
+
+By default, Flyimg generates the AVIF image format (when the browser supports it) which provides superior compression compared to other formats.
+
+Additionally, Flyimg also generates the WebP format, along with the impressive MozJPEG compression algorithm to optimize images, other formats are supported also such as PNG and GIF.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the flyimg to be removed
+ */
+async function removeFlyimgFlyimgInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('flyimg-flyimg');
+    await (0, client_core_1.removeInstance)(ctx, 'flyimg-flyimg', name, serviceAccessToken);
+}
+exports.removeFlyimgFlyimgInstance = removeFlyimgFlyimgInstance;
+/**
+ * Get a flyimg instance
+ *
+ * @description An application that allows you to resize, crop, and compress images on the fly.
+
+By default, Flyimg generates the AVIF image format (when the browser supports it) which provides superior compression compared to other formats.
+
+Additionally, Flyimg also generates the WebP format, along with the impressive MozJPEG compression algorithm to optimize images, other formats are supported also such as PNG and GIF.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the flyimg to be retrieved
+ * @returns {FlyimgFlyimg} - Service instance
+ */
+async function getFlyimgFlyimgInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('flyimg-flyimg');
+    return await (0, client_core_1.getInstance)(ctx, 'flyimg-flyimg', name, serviceAccessToken);
+}
+exports.getFlyimgFlyimgInstance = getFlyimgFlyimgInstance;
+//# sourceMappingURL=flyimg-flyimg.js.map
+
+/***/ }),
+
+/***/ 7321:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getGwuhaolinLivegoInstance = exports.removeGwuhaolinLivegoInstance = exports.createGwuhaolinLivegoInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Livego instance
+ *
+ * @description Experience the power of simplicity and efficiency with our live broadcast server! Easy to install and use, built in pure Golang for high performance. Supports RTMP, AMF, HLS, HTTP-FLV protocols, FLV, TS containers, H264, AAC, MP3 encoding formats. Stream and playback seamlessly with just a few simple steps. Get your hands on this amazing product now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {GwuhaolinLivegoConfig}} body - Service instance configuration
+ * @returns {GwuhaolinLivego} - Service instance
+ * @example
+ * import { Context, createGwuhaolinLivegoInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createGwuhaolinLivegoInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createGwuhaolinLivegoInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('gwuhaolin-livego');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'gwuhaolin-livego', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('gwuhaolin-livego', instance.name, ctx);
+    return instance;
+}
+exports.createGwuhaolinLivegoInstance = createGwuhaolinLivegoInstance;
+/**
+ * Remove a Livego instance
+ *
+ * @description Experience the power of simplicity and efficiency with our live broadcast server! Easy to install and use, built in pure Golang for high performance. Supports RTMP, AMF, HLS, HTTP-FLV protocols, FLV, TS containers, H264, AAC, MP3 encoding formats. Stream and playback seamlessly with just a few simple steps. Get your hands on this amazing product now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the livego to be removed
+ */
+async function removeGwuhaolinLivegoInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('gwuhaolin-livego');
+    await (0, client_core_1.removeInstance)(ctx, 'gwuhaolin-livego', name, serviceAccessToken);
+}
+exports.removeGwuhaolinLivegoInstance = removeGwuhaolinLivegoInstance;
+/**
+ * Get a Livego instance
+ *
+ * @description Experience the power of simplicity and efficiency with our live broadcast server! Easy to install and use, built in pure Golang for high performance. Supports RTMP, AMF, HLS, HTTP-FLV protocols, FLV, TS containers, H264, AAC, MP3 encoding formats. Stream and playback seamlessly with just a few simple steps. Get your hands on this amazing product now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the livego to be retrieved
+ * @returns {GwuhaolinLivego} - Service instance
+ */
+async function getGwuhaolinLivegoInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('gwuhaolin-livego');
+    return await (0, client_core_1.getInstance)(ctx, 'gwuhaolin-livego', name, serviceAccessToken);
+}
+exports.getGwuhaolinLivegoInstance = getGwuhaolinLivegoInstance;
+//# sourceMappingURL=gwuhaolin-livego.js.map
+
+/***/ }),
+
+/***/ 4465:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getItzgDockerMinecraftServerInstance = exports.removeItzgDockerMinecraftServerInstance = exports.createItzgDockerMinecraftServerInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Minecraft Server instance
+ *
+ * @description Experience seamless Minecraft server management with our Docker solution! Easily deploy, customize, and scale your servers with robust support for different versions, mods, and plugins. Perfect for dedicated gamers and server admins alike!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ItzgDockerMinecraftServerConfig}} body - Service instance configuration
+ * @returns {ItzgDockerMinecraftServer} - Service instance
+ * @example
+ * import { Context, createItzgDockerMinecraftServerInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createItzgDockerMinecraftServerInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createItzgDockerMinecraftServerInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('itzg-docker-minecraft-server');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'itzg-docker-minecraft-server', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('itzg-docker-minecraft-server', instance.name, ctx);
+    return instance;
+}
+exports.createItzgDockerMinecraftServerInstance = createItzgDockerMinecraftServerInstance;
+/**
+ * Remove a Minecraft Server instance
+ *
+ * @description Experience seamless Minecraft server management with our Docker solution! Easily deploy, customize, and scale your servers with robust support for different versions, mods, and plugins. Perfect for dedicated gamers and server admins alike!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the minecraft-server to be removed
+ */
+async function removeItzgDockerMinecraftServerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('itzg-docker-minecraft-server');
+    await (0, client_core_1.removeInstance)(ctx, 'itzg-docker-minecraft-server', name, serviceAccessToken);
+}
+exports.removeItzgDockerMinecraftServerInstance = removeItzgDockerMinecraftServerInstance;
+/**
+ * Get a Minecraft Server instance
+ *
+ * @description Experience seamless Minecraft server management with our Docker solution! Easily deploy, customize, and scale your servers with robust support for different versions, mods, and plugins. Perfect for dedicated gamers and server admins alike!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the minecraft-server to be retrieved
+ * @returns {ItzgDockerMinecraftServer} - Service instance
+ */
+async function getItzgDockerMinecraftServerInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('itzg-docker-minecraft-server');
+    return await (0, client_core_1.getInstance)(ctx, 'itzg-docker-minecraft-server', name, serviceAccessToken);
+}
+exports.getItzgDockerMinecraftServerInstance = getItzgDockerMinecraftServerInstance;
+//# sourceMappingURL=itzg-docker-minecraft-server.js.map
+
+/***/ }),
+
+/***/ 994:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getJoeldelpilarTicTacVueInstance = exports.removeJoeldelpilarTicTacVueInstance = exports.createJoeldelpilarTicTacVueInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Tic Tac Vue instance
+ *
+ * @description Discover Tic Tac Vue - the ultimate way to enjoy classic Tic Tac Toe! This engaging game is built with Vue 3, offering smooth gameplay and a modern user interface. Perfect for quick fun!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {JoeldelpilarTicTacVueConfig}} body - Service instance configuration
+ * @returns {JoeldelpilarTicTacVue} - Service instance
+ * @example
+ * import { Context, createJoeldelpilarTicTacVueInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createJoeldelpilarTicTacVueInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createJoeldelpilarTicTacVueInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('joeldelpilar-tic-tac-vue');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'joeldelpilar-tic-tac-vue', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('joeldelpilar-tic-tac-vue', instance.name, ctx);
+    return instance;
+}
+exports.createJoeldelpilarTicTacVueInstance = createJoeldelpilarTicTacVueInstance;
+/**
+ * Remove a Tic Tac Vue instance
+ *
+ * @description Discover Tic Tac Vue - the ultimate way to enjoy classic Tic Tac Toe! This engaging game is built with Vue 3, offering smooth gameplay and a modern user interface. Perfect for quick fun!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the tic-tac-vue to be removed
+ */
+async function removeJoeldelpilarTicTacVueInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('joeldelpilar-tic-tac-vue');
+    await (0, client_core_1.removeInstance)(ctx, 'joeldelpilar-tic-tac-vue', name, serviceAccessToken);
+}
+exports.removeJoeldelpilarTicTacVueInstance = removeJoeldelpilarTicTacVueInstance;
+/**
+ * Get a Tic Tac Vue instance
+ *
+ * @description Discover Tic Tac Vue - the ultimate way to enjoy classic Tic Tac Toe! This engaging game is built with Vue 3, offering smooth gameplay and a modern user interface. Perfect for quick fun!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the tic-tac-vue to be retrieved
+ * @returns {JoeldelpilarTicTacVue} - Service instance
+ */
+async function getJoeldelpilarTicTacVueInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('joeldelpilar-tic-tac-vue');
+    return await (0, client_core_1.getInstance)(ctx, 'joeldelpilar-tic-tac-vue', name, serviceAccessToken);
+}
+exports.getJoeldelpilarTicTacVueInstance = getJoeldelpilarTicTacVueInstance;
+//# sourceMappingURL=joeldelpilar-tic-tac-vue.js.map
+
+/***/ }),
+
+/***/ 7257:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getLinuxserverDockerMariadbInstance = exports.removeLinuxserverDockerMariadbInstance = exports.createLinuxserverDockerMariadbInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new MariaDB instance
+ *
+ * @description Unlock the full potential of your database management with LinuxServer.io's MariaDB Docker container. Featuring seamless updates, security enhancements, and multi-platform support, it's the ideal solution for efficient and reliable data storage. Minimize downtime and bandwidth usage, and maximize your productivity. Transform your database experience now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {LinuxserverDockerMariadbConfig}} body - Service instance configuration
+ * @returns {LinuxserverDockerMariadb} - Service instance
+ * @example
+ * import { Context, createLinuxserverDockerMariadbInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createLinuxserverDockerMariadbInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createLinuxserverDockerMariadbInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('linuxserver-docker-mariadb');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'linuxserver-docker-mariadb', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('linuxserver-docker-mariadb', instance.name, ctx);
+    return instance;
+}
+exports.createLinuxserverDockerMariadbInstance = createLinuxserverDockerMariadbInstance;
+/**
+ * Remove a MariaDB instance
+ *
+ * @description Unlock the full potential of your database management with LinuxServer.io's MariaDB Docker container. Featuring seamless updates, security enhancements, and multi-platform support, it's the ideal solution for efficient and reliable data storage. Minimize downtime and bandwidth usage, and maximize your productivity. Transform your database experience now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the dbserver to be removed
+ */
+async function removeLinuxserverDockerMariadbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('linuxserver-docker-mariadb');
+    await (0, client_core_1.removeInstance)(ctx, 'linuxserver-docker-mariadb', name, serviceAccessToken);
+}
+exports.removeLinuxserverDockerMariadbInstance = removeLinuxserverDockerMariadbInstance;
+/**
+ * Get a MariaDB instance
+ *
+ * @description Unlock the full potential of your database management with LinuxServer.io's MariaDB Docker container. Featuring seamless updates, security enhancements, and multi-platform support, it's the ideal solution for efficient and reliable data storage. Minimize downtime and bandwidth usage, and maximize your productivity. Transform your database experience now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the dbserver to be retrieved
+ * @returns {LinuxserverDockerMariadb} - Service instance
+ */
+async function getLinuxserverDockerMariadbInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('linuxserver-docker-mariadb');
+    return await (0, client_core_1.getInstance)(ctx, 'linuxserver-docker-mariadb', name, serviceAccessToken);
+}
+exports.getLinuxserverDockerMariadbInstance = getLinuxserverDockerMariadbInstance;
+//# sourceMappingURL=linuxserver-docker-mariadb.js.map
+
+/***/ }),
+
+/***/ 2619:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getMickaelKerjeanFilestashInstance = exports.removeMickaelKerjeanFilestashInstance = exports.createMickaelKerjeanFilestashInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Filestash instance
+ *
+ * @description Transform your data management with Filestash, a versatile file manager that integrates seamlessly with multiple cloud services and protocols. Enjoy blazing speed, user-friendly interfaces, and plugin flexibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {MickaelKerjeanFilestashConfig}} body - Service instance configuration
+ * @returns {MickaelKerjeanFilestash} - Service instance
+ * @example
+ * import { Context, createMickaelKerjeanFilestashInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createMickaelKerjeanFilestashInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createMickaelKerjeanFilestashInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('mickael-kerjean-filestash');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'mickael-kerjean-filestash', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('mickael-kerjean-filestash', instance.name, ctx);
+    return instance;
+}
+exports.createMickaelKerjeanFilestashInstance = createMickaelKerjeanFilestashInstance;
+/**
+ * Remove a Filestash instance
+ *
+ * @description Transform your data management with Filestash, a versatile file manager that integrates seamlessly with multiple cloud services and protocols. Enjoy blazing speed, user-friendly interfaces, and plugin flexibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the filestash to be removed
+ */
+async function removeMickaelKerjeanFilestashInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('mickael-kerjean-filestash');
+    await (0, client_core_1.removeInstance)(ctx, 'mickael-kerjean-filestash', name, serviceAccessToken);
+}
+exports.removeMickaelKerjeanFilestashInstance = removeMickaelKerjeanFilestashInstance;
+/**
+ * Get a Filestash instance
+ *
+ * @description Transform your data management with Filestash, a versatile file manager that integrates seamlessly with multiple cloud services and protocols. Enjoy blazing speed, user-friendly interfaces, and plugin flexibility.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the filestash to be retrieved
+ * @returns {MickaelKerjeanFilestash} - Service instance
+ */
+async function getMickaelKerjeanFilestashInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('mickael-kerjean-filestash');
+    return await (0, client_core_1.getInstance)(ctx, 'mickael-kerjean-filestash', name, serviceAccessToken);
+}
+exports.getMickaelKerjeanFilestashInstance = getMickaelKerjeanFilestashInstance;
+//# sourceMappingURL=mickael-kerjean-filestash.js.map
+
+/***/ }),
+
+/***/ 907:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getMinioMinioInstance = exports.removeMinioMinioInstance = exports.createMinioMinioInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new minio instance
+ *
+ * @description MinIO is the High Performance Object Storage solution you've been searching for! API compatible with Amazon S3, it's perfect for machine learning, analytics, and app data workloads. Easy container installation with stable podman run commands. Mac, Linux, Windows support available for simple standalone server setup. Explore further with MinIO SDKs and contribute to the MinIO Project. Get your MinIO now and revolutionize your storage game!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {MinioMinioConfig}} body - Service instance configuration
+ * @returns {MinioMinio} - Service instance
+ * @example
+ * import { Context, createMinioMinioInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createMinioMinioInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createMinioMinioInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('minio-minio');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'minio-minio', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('minio-minio', instance.name, ctx);
+    return instance;
+}
+exports.createMinioMinioInstance = createMinioMinioInstance;
+/**
+ * Remove a minio instance
+ *
+ * @description MinIO is the High Performance Object Storage solution you've been searching for! API compatible with Amazon S3, it's perfect for machine learning, analytics, and app data workloads. Easy container installation with stable podman run commands. Mac, Linux, Windows support available for simple standalone server setup. Explore further with MinIO SDKs and contribute to the MinIO Project. Get your MinIO now and revolutionize your storage game!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the objstorage to be removed
+ */
+async function removeMinioMinioInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('minio-minio');
+    await (0, client_core_1.removeInstance)(ctx, 'minio-minio', name, serviceAccessToken);
+}
+exports.removeMinioMinioInstance = removeMinioMinioInstance;
+/**
+ * Get a minio instance
+ *
+ * @description MinIO is the High Performance Object Storage solution you've been searching for! API compatible with Amazon S3, it's perfect for machine learning, analytics, and app data workloads. Easy container installation with stable podman run commands. Mac, Linux, Windows support available for simple standalone server setup. Explore further with MinIO SDKs and contribute to the MinIO Project. Get your MinIO now and revolutionize your storage game!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the objstorage to be retrieved
+ * @returns {MinioMinio} - Service instance
+ */
+async function getMinioMinioInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('minio-minio');
+    return await (0, client_core_1.getInstance)(ctx, 'minio-minio', name, serviceAccessToken);
+}
+exports.getMinioMinioInstance = getMinioMinioInstance;
+//# sourceMappingURL=minio-minio.js.map
+
+/***/ }),
+
+/***/ 3439:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getOlawalejuwonmAnomalydetectorInstance = exports.removeOlawalejuwonmAnomalydetectorInstance = exports.createOlawalejuwonmAnomalydetectorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Anomaly Detector instance
+ *
+ * @description Safeguard your space with Anomaly Detector, a cutting-edge video surveillance solution. Experience real-time anomaly detection using advanced computer vision, ensuring privacy and reducing false alarms. Enhance security efficiently!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {OlawalejuwonmAnomalydetectorConfig}} body - Service instance configuration
+ * @returns {OlawalejuwonmAnomalydetector} - Service instance
+ * @example
+ * import { Context, createOlawalejuwonmAnomalydetectorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createOlawalejuwonmAnomalydetectorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createOlawalejuwonmAnomalydetectorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('olawalejuwonm-anomalydetector');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'olawalejuwonm-anomalydetector', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('olawalejuwonm-anomalydetector', instance.name, ctx);
+    return instance;
+}
+exports.createOlawalejuwonmAnomalydetectorInstance = createOlawalejuwonmAnomalydetectorInstance;
+/**
+ * Remove a Anomaly Detector instance
+ *
+ * @description Safeguard your space with Anomaly Detector, a cutting-edge video surveillance solution. Experience real-time anomaly detection using advanced computer vision, ensuring privacy and reducing false alarms. Enhance security efficiently!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the anomalydetector to be removed
+ */
+async function removeOlawalejuwonmAnomalydetectorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('olawalejuwonm-anomalydetector');
+    await (0, client_core_1.removeInstance)(ctx, 'olawalejuwonm-anomalydetector', name, serviceAccessToken);
+}
+exports.removeOlawalejuwonmAnomalydetectorInstance = removeOlawalejuwonmAnomalydetectorInstance;
+/**
+ * Get a Anomaly Detector instance
+ *
+ * @description Safeguard your space with Anomaly Detector, a cutting-edge video surveillance solution. Experience real-time anomaly detection using advanced computer vision, ensuring privacy and reducing false alarms. Enhance security efficiently!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the anomalydetector to be retrieved
+ * @returns {OlawalejuwonmAnomalydetector} - Service instance
+ */
+async function getOlawalejuwonmAnomalydetectorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('olawalejuwonm-anomalydetector');
+    return await (0, client_core_1.getInstance)(ctx, 'olawalejuwonm-anomalydetector', name, serviceAccessToken);
+}
+exports.getOlawalejuwonmAnomalydetectorInstance = getOlawalejuwonmAnomalydetectorInstance;
+//# sourceMappingURL=olawalejuwonm-anomalydetector.js.map
+
+/***/ }),
+
+/***/ 7141:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getOssrsSrsInstance = exports.removeOssrsSrsInstance = exports.createOssrsSrsInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Simple Realtime Server instance
+ *
+ * @description Experience high-efficiency video streaming with SRS/6.0. Stream seamlessly with essential features included.
+Transform your streaming experience now! Explore RTMP, HLS, HTTP-FLV, SRT, MPEG-DASH protocols, and more.
+Get started easily!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {OssrsSrsConfig}} body - Service instance configuration
+ * @returns {OssrsSrs} - Service instance
+ * @example
+ * import { Context, createOssrsSrsInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createOssrsSrsInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createOssrsSrsInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ossrs-srs');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'ossrs-srs', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('ossrs-srs', instance.name, ctx);
+    return instance;
+}
+exports.createOssrsSrsInstance = createOssrsSrsInstance;
+/**
+ * Remove a Simple Realtime Server instance
+ *
+ * @description Experience high-efficiency video streaming with SRS/6.0. Stream seamlessly with essential features included.
+Transform your streaming experience now! Explore RTMP, HLS, HTTP-FLV, SRT, MPEG-DASH protocols, and more.
+Get started easily!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the srs to be removed
+ */
+async function removeOssrsSrsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ossrs-srs');
+    await (0, client_core_1.removeInstance)(ctx, 'ossrs-srs', name, serviceAccessToken);
+}
+exports.removeOssrsSrsInstance = removeOssrsSrsInstance;
+/**
+ * Get a Simple Realtime Server instance
+ *
+ * @description Experience high-efficiency video streaming with SRS/6.0. Stream seamlessly with essential features included.
+Transform your streaming experience now! Explore RTMP, HLS, HTTP-FLV, SRT, MPEG-DASH protocols, and more.
+Get started easily!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the srs to be retrieved
+ * @returns {OssrsSrs} - Service instance
+ */
+async function getOssrsSrsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('ossrs-srs');
+    return await (0, client_core_1.getInstance)(ctx, 'ossrs-srs', name, serviceAccessToken);
+}
+exports.getOssrsSrsInstance = getOssrsSrsInstance;
+//# sourceMappingURL=ossrs-srs.js.map
+
+/***/ }),
+
+/***/ 6947:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getOwncastOwncastInstance = exports.removeOwncastOwncastInstance = exports.createOwncastOwncastInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new owncast instance
+ *
+ * @description Revolutionize your live streaming experience with Owncast! Take control over your content, interface, and audience with this self-hosted, open-source platform. Explore the possibilities today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {OwncastOwncastConfig}} body - Service instance configuration
+ * @returns {OwncastOwncast} - Service instance
+ * @example
+ * import { Context, createOwncastOwncastInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createOwncastOwncastInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createOwncastOwncastInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('owncast-owncast');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'owncast-owncast', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('owncast-owncast', instance.name, ctx);
+    return instance;
+}
+exports.createOwncastOwncastInstance = createOwncastOwncastInstance;
+/**
+ * Remove a owncast instance
+ *
+ * @description Revolutionize your live streaming experience with Owncast! Take control over your content, interface, and audience with this self-hosted, open-source platform. Explore the possibilities today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the owncast to be removed
+ */
+async function removeOwncastOwncastInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('owncast-owncast');
+    await (0, client_core_1.removeInstance)(ctx, 'owncast-owncast', name, serviceAccessToken);
+}
+exports.removeOwncastOwncastInstance = removeOwncastOwncastInstance;
+/**
+ * Get a owncast instance
+ *
+ * @description Revolutionize your live streaming experience with Owncast! Take control over your content, interface, and audience with this self-hosted, open-source platform. Explore the possibilities today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the owncast to be retrieved
+ * @returns {OwncastOwncast} - Service instance
+ */
+async function getOwncastOwncastInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('owncast-owncast');
+    return await (0, client_core_1.getInstance)(ctx, 'owncast-owncast', name, serviceAccessToken);
+}
+exports.getOwncastOwncastInstance = getOwncastOwncastInstance;
+//# sourceMappingURL=owncast-owncast.js.map
+
+/***/ }),
+
+/***/ 8588:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getPlausibleAnalyticsInstance = exports.removePlausibleAnalyticsInstance = exports.createPlausibleAnalyticsInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Plausible Analytics instance
+ *
+ * @description Elevate your data privacy with Plausible Analytics. Get simple, clutter-free insights without compromising user privacy. Enjoy an easy, lightweight, and privacy-focused Google Analytics alternative!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {PlausibleAnalyticsConfig}} body - Service instance configuration
+ * @returns {PlausibleAnalytics} - Service instance
+ * @example
+ * import { Context, createPlausibleAnalyticsInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createPlausibleAnalyticsInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createPlausibleAnalyticsInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('plausible-analytics');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'plausible-analytics', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('plausible-analytics', instance.name, ctx);
+    return instance;
+}
+exports.createPlausibleAnalyticsInstance = createPlausibleAnalyticsInstance;
+/**
+ * Remove a Plausible Analytics instance
+ *
+ * @description Elevate your data privacy with Plausible Analytics. Get simple, clutter-free insights without compromising user privacy. Enjoy an easy, lightweight, and privacy-focused Google Analytics alternative!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the server to be removed
+ */
+async function removePlausibleAnalyticsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('plausible-analytics');
+    await (0, client_core_1.removeInstance)(ctx, 'plausible-analytics', name, serviceAccessToken);
+}
+exports.removePlausibleAnalyticsInstance = removePlausibleAnalyticsInstance;
+/**
+ * Get a Plausible Analytics instance
+ *
+ * @description Elevate your data privacy with Plausible Analytics. Get simple, clutter-free insights without compromising user privacy. Enjoy an easy, lightweight, and privacy-focused Google Analytics alternative!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the server to be retrieved
+ * @returns {PlausibleAnalytics} - Service instance
+ */
+async function getPlausibleAnalyticsInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('plausible-analytics');
+    return await (0, client_core_1.getInstance)(ctx, 'plausible-analytics', name, serviceAccessToken);
+}
+exports.getPlausibleAnalyticsInstance = getPlausibleAnalyticsInstance;
+//# sourceMappingURL=plausible-analytics.js.map
+
+/***/ }),
+
+/***/ 6417:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getPoundifdefSmoothmqInstance = exports.removePoundifdefSmoothmqInstance = exports.createPoundifdefSmoothmqInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new SmoothMQ instance
+ *
+ * @description Introducing SmoothMQ, the ultimate drop-in replacement for SQS! Enhance your developer experience with a functional UI, observability, tracing, scheduling, and rate-limiting. Run your own private SQS on any cloud effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {PoundifdefSmoothmqConfig}} body - Service instance configuration
+ * @returns {PoundifdefSmoothmq} - Service instance
+ * @example
+ * import { Context, createPoundifdefSmoothmqInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createPoundifdefSmoothmqInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createPoundifdefSmoothmqInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('poundifdef-smoothmq');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'poundifdef-smoothmq', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('poundifdef-smoothmq', instance.name, ctx);
+    return instance;
+}
+exports.createPoundifdefSmoothmqInstance = createPoundifdefSmoothmqInstance;
+/**
+ * Remove a SmoothMQ instance
+ *
+ * @description Introducing SmoothMQ, the ultimate drop-in replacement for SQS! Enhance your developer experience with a functional UI, observability, tracing, scheduling, and rate-limiting. Run your own private SQS on any cloud effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the message-queue to be removed
+ */
+async function removePoundifdefSmoothmqInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('poundifdef-smoothmq');
+    await (0, client_core_1.removeInstance)(ctx, 'poundifdef-smoothmq', name, serviceAccessToken);
+}
+exports.removePoundifdefSmoothmqInstance = removePoundifdefSmoothmqInstance;
+/**
+ * Get a SmoothMQ instance
+ *
+ * @description Introducing SmoothMQ, the ultimate drop-in replacement for SQS! Enhance your developer experience with a functional UI, observability, tracing, scheduling, and rate-limiting. Run your own private SQS on any cloud effortlessly.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the message-queue to be retrieved
+ * @returns {PoundifdefSmoothmq} - Service instance
+ */
+async function getPoundifdefSmoothmqInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('poundifdef-smoothmq');
+    return await (0, client_core_1.getInstance)(ctx, 'poundifdef-smoothmq', name, serviceAccessToken);
+}
+exports.getPoundifdefSmoothmqInstance = getPoundifdefSmoothmqInstance;
+//# sourceMappingURL=poundifdef-smoothmq.js.map
+
+/***/ }),
+
+/***/ 9773:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getRealeyesMediaMoeReplayInstance = exports.removeRealeyesMediaMoeReplayInstance = exports.createRealeyesMediaMoeReplayInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new MOE Replay instance
+ *
+ * @description Transform live video streams instantly with MOE REPlay. Perfect for creating live HLS manifests on the fly. Enhance your streaming service now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {RealeyesMediaMoeReplayConfig}} body - Service instance configuration
+ * @returns {RealeyesMediaMoeReplay} - Service instance
+ * @example
+ * import { Context, createRealeyesMediaMoeReplayInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createRealeyesMediaMoeReplayInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createRealeyesMediaMoeReplayInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('realeyes-media-moe-replay');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'realeyes-media-moe-replay', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('realeyes-media-moe-replay', instance.name, ctx);
+    return instance;
+}
+exports.createRealeyesMediaMoeReplayInstance = createRealeyesMediaMoeReplayInstance;
+/**
+ * Remove a MOE Replay instance
+ *
+ * @description Transform live video streams instantly with MOE REPlay. Perfect for creating live HLS manifests on the fly. Enhance your streaming service now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the moe-replay to be removed
+ */
+async function removeRealeyesMediaMoeReplayInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('realeyes-media-moe-replay');
+    await (0, client_core_1.removeInstance)(ctx, 'realeyes-media-moe-replay', name, serviceAccessToken);
+}
+exports.removeRealeyesMediaMoeReplayInstance = removeRealeyesMediaMoeReplayInstance;
+/**
+ * Get a MOE Replay instance
+ *
+ * @description Transform live video streams instantly with MOE REPlay. Perfect for creating live HLS manifests on the fly. Enhance your streaming service now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the moe-replay to be retrieved
+ * @returns {RealeyesMediaMoeReplay} - Service instance
+ */
+async function getRealeyesMediaMoeReplayInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('realeyes-media-moe-replay');
+    return await (0, client_core_1.getInstance)(ctx, 'realeyes-media-moe-replay', name, serviceAccessToken);
+}
+exports.getRealeyesMediaMoeReplayInstance = getRealeyesMediaMoeReplayInstance;
+//# sourceMappingURL=realeyes-media-moe-replay.js.map
+
+/***/ }),
+
+/***/ 4017:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getRestorecommercePdfRenderingSrvInstance = exports.removeRestorecommercePdfRenderingSrvInstance = exports.createRestorecommercePdfRenderingSrvInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new PDF Rendering Service instance
+ *
+ * @description Elevate your documentation with our PDF Rendering Service. Turn any URL into a PDF effortlessly. Ideal for business reports and archives. Join the future of document management today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {RestorecommercePdfRenderingSrvConfig}} body - Service instance configuration
+ * @returns {RestorecommercePdfRenderingSrv} - Service instance
+ * @example
+ * import { Context, createRestorecommercePdfRenderingSrvInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createRestorecommercePdfRenderingSrvInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createRestorecommercePdfRenderingSrvInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('restorecommerce-pdf-rendering-srv');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'restorecommerce-pdf-rendering-srv', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('restorecommerce-pdf-rendering-srv', instance.name, ctx);
+    return instance;
+}
+exports.createRestorecommercePdfRenderingSrvInstance = createRestorecommercePdfRenderingSrvInstance;
+/**
+ * Remove a PDF Rendering Service instance
+ *
+ * @description Elevate your documentation with our PDF Rendering Service. Turn any URL into a PDF effortlessly. Ideal for business reports and archives. Join the future of document management today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the pdf-rendering-srv to be removed
+ */
+async function removeRestorecommercePdfRenderingSrvInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('restorecommerce-pdf-rendering-srv');
+    await (0, client_core_1.removeInstance)(ctx, 'restorecommerce-pdf-rendering-srv', name, serviceAccessToken);
+}
+exports.removeRestorecommercePdfRenderingSrvInstance = removeRestorecommercePdfRenderingSrvInstance;
+/**
+ * Get a PDF Rendering Service instance
+ *
+ * @description Elevate your documentation with our PDF Rendering Service. Turn any URL into a PDF effortlessly. Ideal for business reports and archives. Join the future of document management today.
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the pdf-rendering-srv to be retrieved
+ * @returns {RestorecommercePdfRenderingSrv} - Service instance
+ */
+async function getRestorecommercePdfRenderingSrvInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('restorecommerce-pdf-rendering-srv');
+    return await (0, client_core_1.getInstance)(ctx, 'restorecommerce-pdf-rendering-srv', name, serviceAccessToken);
+}
+exports.getRestorecommercePdfRenderingSrvInstance = getRestorecommercePdfRenderingSrvInstance;
+//# sourceMappingURL=restorecommerce-pdf-rendering-srv.js.map
+
+/***/ }),
+
+/***/ 8660:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getSalesagilitySuitecrmInstance = exports.removeSalesagilitySuitecrmInstance = exports.createSalesagilitySuitecrmInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Suite CRM instance
+ *
+ * @description Transform your business with SuiteCRM 7.14.5, the leading open-source CRM. Seamlessly manage customer relationships, gain full data control, and customize your solution for an unbeatable enterprise edge!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {SalesagilitySuitecrmConfig}} body - Service instance configuration
+ * @returns {SalesagilitySuitecrm} - Service instance
+ * @example
+ * import { Context, createSalesagilitySuitecrmInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createSalesagilitySuitecrmInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createSalesagilitySuitecrmInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('salesagility-suitecrm');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'salesagility-suitecrm', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('salesagility-suitecrm', instance.name, ctx);
+    return instance;
+}
+exports.createSalesagilitySuitecrmInstance = createSalesagilitySuitecrmInstance;
+/**
+ * Remove a Suite CRM instance
+ *
+ * @description Transform your business with SuiteCRM 7.14.5, the leading open-source CRM. Seamlessly manage customer relationships, gain full data control, and customize your solution for an unbeatable enterprise edge!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the suitecrm to be removed
+ */
+async function removeSalesagilitySuitecrmInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('salesagility-suitecrm');
+    await (0, client_core_1.removeInstance)(ctx, 'salesagility-suitecrm', name, serviceAccessToken);
+}
+exports.removeSalesagilitySuitecrmInstance = removeSalesagilitySuitecrmInstance;
+/**
+ * Get a Suite CRM instance
+ *
+ * @description Transform your business with SuiteCRM 7.14.5, the leading open-source CRM. Seamlessly manage customer relationships, gain full data control, and customize your solution for an unbeatable enterprise edge!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the suitecrm to be retrieved
+ * @returns {SalesagilitySuitecrm} - Service instance
+ */
+async function getSalesagilitySuitecrmInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('salesagility-suitecrm');
+    return await (0, client_core_1.getInstance)(ctx, 'salesagility-suitecrm', name, serviceAccessToken);
+}
+exports.getSalesagilitySuitecrmInstance = getSalesagilitySuitecrmInstance;
+//# sourceMappingURL=salesagility-suitecrm.js.map
+
+/***/ }),
+
+/***/ 9733:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getSmrchyRestRsmqInstance = exports.removeSmrchyRestRsmqInstance = exports.createSmrchyRestRsmqInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Really Simple Message Queue instance
+ *
+ * @description **Boost Your Productivity with REST rsmq**
+
+Easily integrate with rsmq for efficient message queuing. No security worries, just seamless communication across platforms like php, .net, and more. Maximize performance now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {SmrchyRestRsmqConfig}} body - Service instance configuration
+ * @returns {SmrchyRestRsmq} - Service instance
+ * @example
+ * import { Context, createSmrchyRestRsmqInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createSmrchyRestRsmqInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createSmrchyRestRsmqInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('smrchy-rest-rsmq');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'smrchy-rest-rsmq', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('smrchy-rest-rsmq', instance.name, ctx);
+    return instance;
+}
+exports.createSmrchyRestRsmqInstance = createSmrchyRestRsmqInstance;
+/**
+ * Remove a Really Simple Message Queue instance
+ *
+ * @description **Boost Your Productivity with REST rsmq**
+
+Easily integrate with rsmq for efficient message queuing. No security worries, just seamless communication across platforms like php, .net, and more. Maximize performance now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the message-queue to be removed
+ */
+async function removeSmrchyRestRsmqInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('smrchy-rest-rsmq');
+    await (0, client_core_1.removeInstance)(ctx, 'smrchy-rest-rsmq', name, serviceAccessToken);
+}
+exports.removeSmrchyRestRsmqInstance = removeSmrchyRestRsmqInstance;
+/**
+ * Get a Really Simple Message Queue instance
+ *
+ * @description **Boost Your Productivity with REST rsmq**
+
+Easily integrate with rsmq for efficient message queuing. No security worries, just seamless communication across platforms like php, .net, and more. Maximize performance now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the message-queue to be retrieved
+ * @returns {SmrchyRestRsmq} - Service instance
+ */
+async function getSmrchyRestRsmqInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('smrchy-rest-rsmq');
+    return await (0, client_core_1.getInstance)(ctx, 'smrchy-rest-rsmq', name, serviceAccessToken);
+}
+exports.getSmrchyRestRsmqInstance = getSmrchyRestRsmqInstance;
+//# sourceMappingURL=smrchy-rest-rsmq.js.map
+
+/***/ }),
+
+/***/ 7054:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getSwaggerApiSwaggerEditorInstance = exports.removeSwaggerApiSwaggerEditorInstance = exports.createSwaggerApiSwaggerEditorInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Swagger Editor instance
+ *
+ * @description Next generation Swagger Editor is here! Edit OpenAPI definitions in JSON or YAML format in your browser and preview documentation in real time. Generate valid OpenAPI definitions for full Swagger tooling support. Upgrade to SwaggerEditor@5 for OpenAPI 3.1.0 support and enjoy a brand-new version built from the ground up. Get your Swagger Editor now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {SwaggerApiSwaggerEditorConfig}} body - Service instance configuration
+ * @returns {SwaggerApiSwaggerEditor} - Service instance
+ * @example
+ * import { Context, createSwaggerApiSwaggerEditorInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createSwaggerApiSwaggerEditorInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createSwaggerApiSwaggerEditorInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('swagger-api-swagger-editor');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'swagger-api-swagger-editor', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('swagger-api-swagger-editor', instance.name, ctx);
+    return instance;
+}
+exports.createSwaggerApiSwaggerEditorInstance = createSwaggerApiSwaggerEditorInstance;
+/**
+ * Remove a Swagger Editor instance
+ *
+ * @description Next generation Swagger Editor is here! Edit OpenAPI definitions in JSON or YAML format in your browser and preview documentation in real time. Generate valid OpenAPI definitions for full Swagger tooling support. Upgrade to SwaggerEditor@5 for OpenAPI 3.1.0 support and enjoy a brand-new version built from the ground up. Get your Swagger Editor now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the editor to be removed
+ */
+async function removeSwaggerApiSwaggerEditorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('swagger-api-swagger-editor');
+    await (0, client_core_1.removeInstance)(ctx, 'swagger-api-swagger-editor', name, serviceAccessToken);
+}
+exports.removeSwaggerApiSwaggerEditorInstance = removeSwaggerApiSwaggerEditorInstance;
+/**
+ * Get a Swagger Editor instance
+ *
+ * @description Next generation Swagger Editor is here! Edit OpenAPI definitions in JSON or YAML format in your browser and preview documentation in real time. Generate valid OpenAPI definitions for full Swagger tooling support. Upgrade to SwaggerEditor@5 for OpenAPI 3.1.0 support and enjoy a brand-new version built from the ground up. Get your Swagger Editor now!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the editor to be retrieved
+ * @returns {SwaggerApiSwaggerEditor} - Service instance
+ */
+async function getSwaggerApiSwaggerEditorInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('swagger-api-swagger-editor');
+    return await (0, client_core_1.getInstance)(ctx, 'swagger-api-swagger-editor', name, serviceAccessToken);
+}
+exports.getSwaggerApiSwaggerEditorInstance = getSwaggerApiSwaggerEditorInstance;
+//# sourceMappingURL=swagger-api-swagger-editor.js.map
+
+/***/ }),
+
+/***/ 6552:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getUsefathomFathomInstance = exports.removeUsefathomFathomInstance = exports.createUsefathomFathomInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Fathom Lite instance
+ *
+ * @description Introducing Fathom Lite - the popular, open-source website analytics tool with millions of downloads! Long-term maintenance, bug fixes, and cookie-free tracking set it apart. Get started today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {UsefathomFathomConfig}} body - Service instance configuration
+ * @returns {UsefathomFathom} - Service instance
+ * @example
+ * import { Context, createUsefathomFathomInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createUsefathomFathomInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createUsefathomFathomInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('usefathom-fathom');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'usefathom-fathom', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('usefathom-fathom', instance.name, ctx);
+    return instance;
+}
+exports.createUsefathomFathomInstance = createUsefathomFathomInstance;
+/**
+ * Remove a Fathom Lite instance
+ *
+ * @description Introducing Fathom Lite - the popular, open-source website analytics tool with millions of downloads! Long-term maintenance, bug fixes, and cookie-free tracking set it apart. Get started today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the collector to be removed
+ */
+async function removeUsefathomFathomInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('usefathom-fathom');
+    await (0, client_core_1.removeInstance)(ctx, 'usefathom-fathom', name, serviceAccessToken);
+}
+exports.removeUsefathomFathomInstance = removeUsefathomFathomInstance;
+/**
+ * Get a Fathom Lite instance
+ *
+ * @description Introducing Fathom Lite - the popular, open-source website analytics tool with millions of downloads! Long-term maintenance, bug fixes, and cookie-free tracking set it apart. Get started today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the collector to be retrieved
+ * @returns {UsefathomFathom} - Service instance
+ */
+async function getUsefathomFathomInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('usefathom-fathom');
+    return await (0, client_core_1.getInstance)(ctx, 'usefathom-fathom', name, serviceAccessToken);
+}
+exports.getUsefathomFathomInstance = getUsefathomFathomInstance;
+//# sourceMappingURL=usefathom-fathom.js.map
+
+/***/ }),
+
+/***/ 6638:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getValkeyIoValkeyInstance = exports.removeValkeyIoValkeyInstance = exports.createValkeyIoValkeyInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new valkey instance
+ *
+ * @description Introducing Valkey: a Redis-compatible high-performance key-value store with wide range support. Build on various systems, extensible plugin system, and TLS support available.
+
+NB! Data persistence not guaranteed
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {ValkeyIoValkeyConfig}} body - Service instance configuration
+ * @returns {ValkeyIoValkey} - Service instance
+ * @example
+ * import { Context, createValkeyIoValkeyInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createValkeyIoValkeyInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createValkeyIoValkeyInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('valkey-io-valkey');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'valkey-io-valkey', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('valkey-io-valkey', instance.name, ctx);
+    return instance;
+}
+exports.createValkeyIoValkeyInstance = createValkeyIoValkeyInstance;
+/**
+ * Remove a valkey instance
+ *
+ * @description Introducing Valkey: a Redis-compatible high-performance key-value store with wide range support. Build on various systems, extensible plugin system, and TLS support available.
+
+NB! Data persistence not guaranteed
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the valkey to be removed
+ */
+async function removeValkeyIoValkeyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('valkey-io-valkey');
+    await (0, client_core_1.removeInstance)(ctx, 'valkey-io-valkey', name, serviceAccessToken);
+}
+exports.removeValkeyIoValkeyInstance = removeValkeyIoValkeyInstance;
+/**
+ * Get a valkey instance
+ *
+ * @description Introducing Valkey: a Redis-compatible high-performance key-value store with wide range support. Build on various systems, extensible plugin system, and TLS support available.
+
+NB! Data persistence not guaranteed
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the valkey to be retrieved
+ * @returns {ValkeyIoValkey} - Service instance
+ */
+async function getValkeyIoValkeyInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('valkey-io-valkey');
+    return await (0, client_core_1.getInstance)(ctx, 'valkey-io-valkey', name, serviceAccessToken);
+}
+exports.getValkeyIoValkeyInstance = getValkeyIoValkeyInstance;
+//# sourceMappingURL=valkey-io-valkey.js.map
+
+/***/ }),
+
+/***/ 2911:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getWordpressWordpressInstance = exports.removeWordpressWordpressInstance = exports.createWordpressWordpressInstance = void 0;
+const client_core_1 = __nccwpck_require__(1483);
+/**
+ * Create a new Wordpress instance
+ *
+ * @description Power your site with WordPress – the core behind 40% of the web. Enjoy seamless installation, robust customization, and unmatched scalability. Elevate your online presence effortlessly today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {WordpressWordpressConfig}} body - Service instance configuration
+ * @returns {WordpressWordpress} - Service instance
+ * @example
+ * import { Context, createWordpressWordpressInstance } from '@osaas/client-services';
+ *
+ * const ctx = new Context();
+ * const instance = await createWordpressWordpressInstance(ctx, { name: 'myinstance' });
+ * console.log(instance.url);
+ */
+async function createWordpressWordpressInstance(ctx, body) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('wordpress-wordpress');
+    const instance = await (0, client_core_1.createInstance)(ctx, 'wordpress-wordpress', serviceAccessToken, body);
+    await (0, client_core_1.waitForInstanceReady)('wordpress-wordpress', instance.name, ctx);
+    return instance;
+}
+exports.createWordpressWordpressInstance = createWordpressWordpressInstance;
+/**
+ * Remove a Wordpress instance
+ *
+ * @description Power your site with WordPress – the core behind 40% of the web. Enjoy seamless installation, robust customization, and unmatched scalability. Elevate your online presence effortlessly today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the wordpress to be removed
+ */
+async function removeWordpressWordpressInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('wordpress-wordpress');
+    await (0, client_core_1.removeInstance)(ctx, 'wordpress-wordpress', name, serviceAccessToken);
+}
+exports.removeWordpressWordpressInstance = removeWordpressWordpressInstance;
+/**
+ * Get a Wordpress instance
+ *
+ * @description Power your site with WordPress – the core behind 40% of the web. Enjoy seamless installation, robust customization, and unmatched scalability. Elevate your online presence effortlessly today!
+ * @param {Context} context - Open Source Cloud configuration context
+ * @param {string} name - Name of the wordpress to be retrieved
+ * @returns {WordpressWordpress} - Service instance
+ */
+async function getWordpressWordpressInstance(ctx, name) {
+    const serviceAccessToken = await ctx.getServiceAccessToken('wordpress-wordpress');
+    return await (0, client_core_1.getInstance)(ctx, 'wordpress-wordpress', name, serviceAccessToken);
+}
+exports.getWordpressWordpressInstance = getWordpressWordpressInstance;
+//# sourceMappingURL=wordpress-wordpress.js.map
+
+/***/ }),
+
+/***/ 6404:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.removeRestorecommercePdfRenderingSrvInstance = exports.createRestorecommercePdfRenderingSrvInstance = exports.getFlyimgFlyimgInstance = exports.removeFlyimgFlyimgInstance = exports.createFlyimgFlyimgInstance = exports.getEyevinnContinueWatchingApiInstance = exports.removeEyevinnContinueWatchingApiInstance = exports.createEyevinnContinueWatchingApiInstance = exports.getEyevinnRustImageProcessorInstance = exports.removeEyevinnRustImageProcessorInstance = exports.createEyevinnRustImageProcessorInstance = exports.getEyevinnScheduleServiceInstance = exports.removeEyevinnScheduleServiceInstance = exports.createEyevinnScheduleServiceInstance = exports.getEyevinnFunctionProbeInstance = exports.removeEyevinnFunctionProbeInstance = exports.createEyevinnFunctionProbeInstance = exports.getEyevinnCastReceiverInstance = exports.removeEyevinnCastReceiverInstance = exports.createEyevinnCastReceiverInstance = exports.getEyevinnHlsMonitorInstance = exports.removeEyevinnHlsMonitorInstance = exports.createEyevinnHlsMonitorInstance = exports.getEyevinnPreviewHlsServiceInstance = exports.removeEyevinnPreviewHlsServiceInstance = exports.createEyevinnPreviewHlsServiceInstance = exports.getEyevinnFunctionScenesInstance = exports.removeEyevinnFunctionScenesInstance = exports.createEyevinnFunctionScenesInstance = exports.getEyevinnLambdaStitchInstance = exports.removeEyevinnLambdaStitchInstance = exports.createEyevinnLambdaStitchInstance = exports.getEyevinnAutoSubtitlesInstance = exports.removeEyevinnAutoSubtitlesInstance = exports.createEyevinnAutoSubtitlesInstance = exports.getEyevinnChannelEngineBridgeInstance = exports.removeEyevinnChannelEngineBridgeInstance = exports.createEyevinnChannelEngineBridgeInstance = exports.getEyevinnChaosStreamProxyInstance = exports.removeEyevinnChaosStreamProxyInstance = exports.createEyevinnChaosStreamProxyInstance = exports.getEyevinnTestAdserverInstance = exports.removeEyevinnTestAdserverInstance = exports.createEyevinnTestAdserverInstance = exports.getEncoreInstance = exports.removeEncoreInstance = exports.createEncoreInstance = exports.getChannelEngineInstance = exports.removeChannelEngineInstance = exports.createChannelEngineInstance = void 0;
+exports.createEyevinnEncoreTransferInstance = exports.getPoundifdefSmoothmqInstance = exports.removePoundifdefSmoothmqInstance = exports.createPoundifdefSmoothmqInstance = exports.getMinioMinioInstance = exports.removeMinioMinioInstance = exports.createMinioMinioInstance = exports.getSmrchyRestRsmqInstance = exports.removeSmrchyRestRsmqInstance = exports.createSmrchyRestRsmqInstance = exports.getEyevinnEncorePackagerInstance = exports.removeEyevinnEncorePackagerInstance = exports.createEyevinnEncorePackagerInstance = exports.getEyevinnEncoreCallbackListenerInstance = exports.removeEyevinnEncoreCallbackListenerInstance = exports.createEyevinnEncoreCallbackListenerInstance = exports.getUsefathomFathomInstance = exports.removeUsefathomFathomInstance = exports.createUsefathomFathomInstance = exports.getDashIndustryForumLivesim2Instance = exports.removeDashIndustryForumLivesim2Instance = exports.createDashIndustryForumLivesim2Instance = exports.getEyevinnSrtWhepInstance = exports.removeEyevinnSrtWhepInstance = exports.createEyevinnSrtWhepInstance = exports.getValkeyIoValkeyInstance = exports.removeValkeyIoValkeyInstance = exports.createValkeyIoValkeyInstance = exports.getEyevinnIntercomManagerInstance = exports.removeEyevinnIntercomManagerInstance = exports.createEyevinnIntercomManagerInstance = exports.getGwuhaolinLivegoInstance = exports.removeGwuhaolinLivegoInstance = exports.createGwuhaolinLivegoInstance = exports.getOssrsSrsInstance = exports.removeOssrsSrsInstance = exports.createOssrsSrsInstance = exports.getOwncastOwncastInstance = exports.removeOwncastOwncastInstance = exports.createOwncastOwncastInstance = exports.getDatarheiRestreamerInstance = exports.removeDatarheiRestreamerInstance = exports.createDatarheiRestreamerInstance = exports.getEyevinnFunctionTrimInstance = exports.removeEyevinnFunctionTrimInstance = exports.createEyevinnFunctionTrimInstance = exports.getBbcBraveInstance = exports.removeBbcBraveInstance = exports.createBbcBraveInstance = exports.getRestorecommercePdfRenderingSrvInstance = void 0;
+exports.getOlawalejuwonmAnomalydetectorInstance = exports.removeOlawalejuwonmAnomalydetectorInstance = exports.createOlawalejuwonmAnomalydetectorInstance = exports.getWordpressWordpressInstance = exports.removeWordpressWordpressInstance = exports.createWordpressWordpressInstance = exports.getAnderswassenChaosproxyConfigInstance = exports.removeAnderswassenChaosproxyConfigInstance = exports.createAnderswassenChaosproxyConfigInstance = exports.getAlexbj7590stvInstance = exports.removeAlexbj7590stvInstance = exports.createAlexbj7590stvInstance = exports.getBirmeCaptchaSvcInstance = exports.removeBirmeCaptchaSvcInstance = exports.createBirmeCaptchaSvcInstance = exports.getBirmeContactFormSvcInstance = exports.removeBirmeContactFormSvcInstance = exports.createBirmeContactFormSvcInstance = exports.getAlexbj75MovierecommendatorInstance = exports.removeAlexbj75MovierecommendatorInstance = exports.createAlexbj75MovierecommendatorInstance = exports.getLinuxserverDockerMariadbInstance = exports.removeLinuxserverDockerMariadbInstance = exports.createLinuxserverDockerMariadbInstance = exports.getBirmeLambdaInstance = exports.removeBirmeLambdaInstance = exports.createBirmeLambdaInstance = exports.getItzgDockerMinecraftServerInstance = exports.removeItzgDockerMinecraftServerInstance = exports.createItzgDockerMinecraftServerInstance = exports.getRealeyesMediaMoeReplayInstance = exports.removeRealeyesMediaMoeReplayInstance = exports.createRealeyesMediaMoeReplayInstance = exports.getSwaggerApiSwaggerEditorInstance = exports.removeSwaggerApiSwaggerEditorInstance = exports.createSwaggerApiSwaggerEditorInstance = exports.getEyevinnWrtcEgressInstance = exports.removeEyevinnWrtcEgressInstance = exports.createEyevinnWrtcEgressInstance = exports.getEyevinnSmbWhipBridgeInstance = exports.removeEyevinnSmbWhipBridgeInstance = exports.createEyevinnSmbWhipBridgeInstance = exports.getBwallbergKingsAndPigsTsInstance = exports.removeBwallbergKingsAndPigsTsInstance = exports.createBwallbergKingsAndPigsTsInstance = exports.getEyevinnLiveEncodingInstance = exports.removeEyevinnLiveEncodingInstance = exports.createEyevinnLiveEncodingInstance = exports.getEyevinnEncoreTransferInstance = exports.removeEyevinnEncoreTransferInstance = void 0;
+exports.removeEyevinnPdsAdminInstance = exports.createEyevinnPdsAdminInstance = exports.getDocusealcoDocusealInstance = exports.removeDocusealcoDocusealInstance = exports.createDocusealcoDocusealInstance = exports.getBlueskySocialPdsInstance = exports.removeBlueskySocialPdsInstance = exports.createBlueskySocialPdsInstance = exports.getPlausibleAnalyticsInstance = exports.removePlausibleAnalyticsInstance = exports.createPlausibleAnalyticsInstance = exports.getMickaelKerjeanFilestashInstance = exports.removeMickaelKerjeanFilestashInstance = exports.createMickaelKerjeanFilestashInstance = exports.getEyevinnSgaiAdProxyInstance = exports.removeEyevinnSgaiAdProxyInstance = exports.createEyevinnSgaiAdProxyInstance = exports.getApacheCouchdbInstance = exports.removeApacheCouchdbInstance = exports.createApacheCouchdbInstance = exports.getEyevinnDockerTestsrcHlsLiveInstance = exports.removeEyevinnDockerTestsrcHlsLiveInstance = exports.createEyevinnDockerTestsrcHlsLiveInstance = exports.getSalesagilitySuitecrmInstance = exports.removeSalesagilitySuitecrmInstance = exports.createSalesagilitySuitecrmInstance = exports.getBirmeOscPostgresqlInstance = exports.removeBirmeOscPostgresqlInstance = exports.createBirmeOscPostgresqlInstance = exports.getAndersnasNodecatInstance = exports.removeAndersnasNodecatInstance = exports.createAndersnasNodecatInstance = exports.getChambanaNetDockerPodcastgenInstance = exports.removeChambanaNetDockerPodcastgenInstance = exports.createChambanaNetDockerPodcastgenInstance = exports.getErnestocaroccaHelloWorldInstance = exports.removeErnestocaroccaHelloWorldInstance = exports.createErnestocaroccaHelloWorldInstance = exports.getEyevinnAppConfigSvcInstance = exports.removeEyevinnAppConfigSvcInstance = exports.createEyevinnAppConfigSvcInstance = exports.getEyevinnQrGeneratorInstance = exports.removeEyevinnQrGeneratorInstance = exports.createEyevinnQrGeneratorInstance = exports.getJoeldelpilarTicTacVueInstance = exports.removeJoeldelpilarTicTacVueInstance = exports.createJoeldelpilarTicTacVueInstance = exports.getAtmozSftpInstance = exports.removeAtmozSftpInstance = exports.createAtmozSftpInstance = void 0;
+exports.getEyevinnAiCodeReviewerInstance = exports.removeEyevinnAiCodeReviewerInstance = exports.createEyevinnAiCodeReviewerInstance = exports.getDrawdbIoDrawdbInstance = exports.removeDrawdbIoDrawdbInstance = exports.createDrawdbIoDrawdbInstance = exports.getEyevinnCeSampleWebhookInstance = exports.removeEyevinnCeSampleWebhookInstance = exports.createEyevinnCeSampleWebhookInstance = exports.getEyevinnPdsAdminInstance = void 0;
+/**
+ * This file was auto-generated by openapi-typescript.
+ * Do not make direct changes to the file.
+ */
+var channel_engine_1 = __nccwpck_require__(4432);
+Object.defineProperty(exports, "createChannelEngineInstance", ({ enumerable: true, get: function () { return channel_engine_1.createChannelEngineInstance; } }));
+Object.defineProperty(exports, "removeChannelEngineInstance", ({ enumerable: true, get: function () { return channel_engine_1.removeChannelEngineInstance; } }));
+Object.defineProperty(exports, "getChannelEngineInstance", ({ enumerable: true, get: function () { return channel_engine_1.getChannelEngineInstance; } }));
+var encore_1 = __nccwpck_require__(9432);
+Object.defineProperty(exports, "createEncoreInstance", ({ enumerable: true, get: function () { return encore_1.createEncoreInstance; } }));
+Object.defineProperty(exports, "removeEncoreInstance", ({ enumerable: true, get: function () { return encore_1.removeEncoreInstance; } }));
+Object.defineProperty(exports, "getEncoreInstance", ({ enumerable: true, get: function () { return encore_1.getEncoreInstance; } }));
+var eyevinn_test_adserver_1 = __nccwpck_require__(4250);
+Object.defineProperty(exports, "createEyevinnTestAdserverInstance", ({ enumerable: true, get: function () { return eyevinn_test_adserver_1.createEyevinnTestAdserverInstance; } }));
+Object.defineProperty(exports, "removeEyevinnTestAdserverInstance", ({ enumerable: true, get: function () { return eyevinn_test_adserver_1.removeEyevinnTestAdserverInstance; } }));
+Object.defineProperty(exports, "getEyevinnTestAdserverInstance", ({ enumerable: true, get: function () { return eyevinn_test_adserver_1.getEyevinnTestAdserverInstance; } }));
+var eyevinn_chaos_stream_proxy_1 = __nccwpck_require__(1213);
+Object.defineProperty(exports, "createEyevinnChaosStreamProxyInstance", ({ enumerable: true, get: function () { return eyevinn_chaos_stream_proxy_1.createEyevinnChaosStreamProxyInstance; } }));
+Object.defineProperty(exports, "removeEyevinnChaosStreamProxyInstance", ({ enumerable: true, get: function () { return eyevinn_chaos_stream_proxy_1.removeEyevinnChaosStreamProxyInstance; } }));
+Object.defineProperty(exports, "getEyevinnChaosStreamProxyInstance", ({ enumerable: true, get: function () { return eyevinn_chaos_stream_proxy_1.getEyevinnChaosStreamProxyInstance; } }));
+var eyevinn_channel_engine_bridge_1 = __nccwpck_require__(625);
+Object.defineProperty(exports, "createEyevinnChannelEngineBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_channel_engine_bridge_1.createEyevinnChannelEngineBridgeInstance; } }));
+Object.defineProperty(exports, "removeEyevinnChannelEngineBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_channel_engine_bridge_1.removeEyevinnChannelEngineBridgeInstance; } }));
+Object.defineProperty(exports, "getEyevinnChannelEngineBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_channel_engine_bridge_1.getEyevinnChannelEngineBridgeInstance; } }));
+var eyevinn_auto_subtitles_1 = __nccwpck_require__(9496);
+Object.defineProperty(exports, "createEyevinnAutoSubtitlesInstance", ({ enumerable: true, get: function () { return eyevinn_auto_subtitles_1.createEyevinnAutoSubtitlesInstance; } }));
+Object.defineProperty(exports, "removeEyevinnAutoSubtitlesInstance", ({ enumerable: true, get: function () { return eyevinn_auto_subtitles_1.removeEyevinnAutoSubtitlesInstance; } }));
+Object.defineProperty(exports, "getEyevinnAutoSubtitlesInstance", ({ enumerable: true, get: function () { return eyevinn_auto_subtitles_1.getEyevinnAutoSubtitlesInstance; } }));
+var eyevinn_lambda_stitch_1 = __nccwpck_require__(1232);
+Object.defineProperty(exports, "createEyevinnLambdaStitchInstance", ({ enumerable: true, get: function () { return eyevinn_lambda_stitch_1.createEyevinnLambdaStitchInstance; } }));
+Object.defineProperty(exports, "removeEyevinnLambdaStitchInstance", ({ enumerable: true, get: function () { return eyevinn_lambda_stitch_1.removeEyevinnLambdaStitchInstance; } }));
+Object.defineProperty(exports, "getEyevinnLambdaStitchInstance", ({ enumerable: true, get: function () { return eyevinn_lambda_stitch_1.getEyevinnLambdaStitchInstance; } }));
+var eyevinn_function_scenes_1 = __nccwpck_require__(6949);
+Object.defineProperty(exports, "createEyevinnFunctionScenesInstance", ({ enumerable: true, get: function () { return eyevinn_function_scenes_1.createEyevinnFunctionScenesInstance; } }));
+Object.defineProperty(exports, "removeEyevinnFunctionScenesInstance", ({ enumerable: true, get: function () { return eyevinn_function_scenes_1.removeEyevinnFunctionScenesInstance; } }));
+Object.defineProperty(exports, "getEyevinnFunctionScenesInstance", ({ enumerable: true, get: function () { return eyevinn_function_scenes_1.getEyevinnFunctionScenesInstance; } }));
+var eyevinn_preview_hls_service_1 = __nccwpck_require__(7985);
+Object.defineProperty(exports, "createEyevinnPreviewHlsServiceInstance", ({ enumerable: true, get: function () { return eyevinn_preview_hls_service_1.createEyevinnPreviewHlsServiceInstance; } }));
+Object.defineProperty(exports, "removeEyevinnPreviewHlsServiceInstance", ({ enumerable: true, get: function () { return eyevinn_preview_hls_service_1.removeEyevinnPreviewHlsServiceInstance; } }));
+Object.defineProperty(exports, "getEyevinnPreviewHlsServiceInstance", ({ enumerable: true, get: function () { return eyevinn_preview_hls_service_1.getEyevinnPreviewHlsServiceInstance; } }));
+var eyevinn_hls_monitor_1 = __nccwpck_require__(6913);
+Object.defineProperty(exports, "createEyevinnHlsMonitorInstance", ({ enumerable: true, get: function () { return eyevinn_hls_monitor_1.createEyevinnHlsMonitorInstance; } }));
+Object.defineProperty(exports, "removeEyevinnHlsMonitorInstance", ({ enumerable: true, get: function () { return eyevinn_hls_monitor_1.removeEyevinnHlsMonitorInstance; } }));
+Object.defineProperty(exports, "getEyevinnHlsMonitorInstance", ({ enumerable: true, get: function () { return eyevinn_hls_monitor_1.getEyevinnHlsMonitorInstance; } }));
+var eyevinn_cast_receiver_1 = __nccwpck_require__(6128);
+Object.defineProperty(exports, "createEyevinnCastReceiverInstance", ({ enumerable: true, get: function () { return eyevinn_cast_receiver_1.createEyevinnCastReceiverInstance; } }));
+Object.defineProperty(exports, "removeEyevinnCastReceiverInstance", ({ enumerable: true, get: function () { return eyevinn_cast_receiver_1.removeEyevinnCastReceiverInstance; } }));
+Object.defineProperty(exports, "getEyevinnCastReceiverInstance", ({ enumerable: true, get: function () { return eyevinn_cast_receiver_1.getEyevinnCastReceiverInstance; } }));
+var eyevinn_function_probe_1 = __nccwpck_require__(2152);
+Object.defineProperty(exports, "createEyevinnFunctionProbeInstance", ({ enumerable: true, get: function () { return eyevinn_function_probe_1.createEyevinnFunctionProbeInstance; } }));
+Object.defineProperty(exports, "removeEyevinnFunctionProbeInstance", ({ enumerable: true, get: function () { return eyevinn_function_probe_1.removeEyevinnFunctionProbeInstance; } }));
+Object.defineProperty(exports, "getEyevinnFunctionProbeInstance", ({ enumerable: true, get: function () { return eyevinn_function_probe_1.getEyevinnFunctionProbeInstance; } }));
+var eyevinn_schedule_service_1 = __nccwpck_require__(8672);
+Object.defineProperty(exports, "createEyevinnScheduleServiceInstance", ({ enumerable: true, get: function () { return eyevinn_schedule_service_1.createEyevinnScheduleServiceInstance; } }));
+Object.defineProperty(exports, "removeEyevinnScheduleServiceInstance", ({ enumerable: true, get: function () { return eyevinn_schedule_service_1.removeEyevinnScheduleServiceInstance; } }));
+Object.defineProperty(exports, "getEyevinnScheduleServiceInstance", ({ enumerable: true, get: function () { return eyevinn_schedule_service_1.getEyevinnScheduleServiceInstance; } }));
+var eyevinn_rust_image_processor_1 = __nccwpck_require__(7360);
+Object.defineProperty(exports, "createEyevinnRustImageProcessorInstance", ({ enumerable: true, get: function () { return eyevinn_rust_image_processor_1.createEyevinnRustImageProcessorInstance; } }));
+Object.defineProperty(exports, "removeEyevinnRustImageProcessorInstance", ({ enumerable: true, get: function () { return eyevinn_rust_image_processor_1.removeEyevinnRustImageProcessorInstance; } }));
+Object.defineProperty(exports, "getEyevinnRustImageProcessorInstance", ({ enumerable: true, get: function () { return eyevinn_rust_image_processor_1.getEyevinnRustImageProcessorInstance; } }));
+var eyevinn_continue_watching_api_1 = __nccwpck_require__(8475);
+Object.defineProperty(exports, "createEyevinnContinueWatchingApiInstance", ({ enumerable: true, get: function () { return eyevinn_continue_watching_api_1.createEyevinnContinueWatchingApiInstance; } }));
+Object.defineProperty(exports, "removeEyevinnContinueWatchingApiInstance", ({ enumerable: true, get: function () { return eyevinn_continue_watching_api_1.removeEyevinnContinueWatchingApiInstance; } }));
+Object.defineProperty(exports, "getEyevinnContinueWatchingApiInstance", ({ enumerable: true, get: function () { return eyevinn_continue_watching_api_1.getEyevinnContinueWatchingApiInstance; } }));
+var flyimg_flyimg_1 = __nccwpck_require__(6353);
+Object.defineProperty(exports, "createFlyimgFlyimgInstance", ({ enumerable: true, get: function () { return flyimg_flyimg_1.createFlyimgFlyimgInstance; } }));
+Object.defineProperty(exports, "removeFlyimgFlyimgInstance", ({ enumerable: true, get: function () { return flyimg_flyimg_1.removeFlyimgFlyimgInstance; } }));
+Object.defineProperty(exports, "getFlyimgFlyimgInstance", ({ enumerable: true, get: function () { return flyimg_flyimg_1.getFlyimgFlyimgInstance; } }));
+var restorecommerce_pdf_rendering_srv_1 = __nccwpck_require__(4017);
+Object.defineProperty(exports, "createRestorecommercePdfRenderingSrvInstance", ({ enumerable: true, get: function () { return restorecommerce_pdf_rendering_srv_1.createRestorecommercePdfRenderingSrvInstance; } }));
+Object.defineProperty(exports, "removeRestorecommercePdfRenderingSrvInstance", ({ enumerable: true, get: function () { return restorecommerce_pdf_rendering_srv_1.removeRestorecommercePdfRenderingSrvInstance; } }));
+Object.defineProperty(exports, "getRestorecommercePdfRenderingSrvInstance", ({ enumerable: true, get: function () { return restorecommerce_pdf_rendering_srv_1.getRestorecommercePdfRenderingSrvInstance; } }));
+var bbc_brave_1 = __nccwpck_require__(1440);
+Object.defineProperty(exports, "createBbcBraveInstance", ({ enumerable: true, get: function () { return bbc_brave_1.createBbcBraveInstance; } }));
+Object.defineProperty(exports, "removeBbcBraveInstance", ({ enumerable: true, get: function () { return bbc_brave_1.removeBbcBraveInstance; } }));
+Object.defineProperty(exports, "getBbcBraveInstance", ({ enumerable: true, get: function () { return bbc_brave_1.getBbcBraveInstance; } }));
+var eyevinn_function_trim_1 = __nccwpck_require__(1124);
+Object.defineProperty(exports, "createEyevinnFunctionTrimInstance", ({ enumerable: true, get: function () { return eyevinn_function_trim_1.createEyevinnFunctionTrimInstance; } }));
+Object.defineProperty(exports, "removeEyevinnFunctionTrimInstance", ({ enumerable: true, get: function () { return eyevinn_function_trim_1.removeEyevinnFunctionTrimInstance; } }));
+Object.defineProperty(exports, "getEyevinnFunctionTrimInstance", ({ enumerable: true, get: function () { return eyevinn_function_trim_1.getEyevinnFunctionTrimInstance; } }));
+var datarhei_restreamer_1 = __nccwpck_require__(8407);
+Object.defineProperty(exports, "createDatarheiRestreamerInstance", ({ enumerable: true, get: function () { return datarhei_restreamer_1.createDatarheiRestreamerInstance; } }));
+Object.defineProperty(exports, "removeDatarheiRestreamerInstance", ({ enumerable: true, get: function () { return datarhei_restreamer_1.removeDatarheiRestreamerInstance; } }));
+Object.defineProperty(exports, "getDatarheiRestreamerInstance", ({ enumerable: true, get: function () { return datarhei_restreamer_1.getDatarheiRestreamerInstance; } }));
+var owncast_owncast_1 = __nccwpck_require__(6947);
+Object.defineProperty(exports, "createOwncastOwncastInstance", ({ enumerable: true, get: function () { return owncast_owncast_1.createOwncastOwncastInstance; } }));
+Object.defineProperty(exports, "removeOwncastOwncastInstance", ({ enumerable: true, get: function () { return owncast_owncast_1.removeOwncastOwncastInstance; } }));
+Object.defineProperty(exports, "getOwncastOwncastInstance", ({ enumerable: true, get: function () { return owncast_owncast_1.getOwncastOwncastInstance; } }));
+var ossrs_srs_1 = __nccwpck_require__(7141);
+Object.defineProperty(exports, "createOssrsSrsInstance", ({ enumerable: true, get: function () { return ossrs_srs_1.createOssrsSrsInstance; } }));
+Object.defineProperty(exports, "removeOssrsSrsInstance", ({ enumerable: true, get: function () { return ossrs_srs_1.removeOssrsSrsInstance; } }));
+Object.defineProperty(exports, "getOssrsSrsInstance", ({ enumerable: true, get: function () { return ossrs_srs_1.getOssrsSrsInstance; } }));
+var gwuhaolin_livego_1 = __nccwpck_require__(7321);
+Object.defineProperty(exports, "createGwuhaolinLivegoInstance", ({ enumerable: true, get: function () { return gwuhaolin_livego_1.createGwuhaolinLivegoInstance; } }));
+Object.defineProperty(exports, "removeGwuhaolinLivegoInstance", ({ enumerable: true, get: function () { return gwuhaolin_livego_1.removeGwuhaolinLivegoInstance; } }));
+Object.defineProperty(exports, "getGwuhaolinLivegoInstance", ({ enumerable: true, get: function () { return gwuhaolin_livego_1.getGwuhaolinLivegoInstance; } }));
+var eyevinn_intercom_manager_1 = __nccwpck_require__(8314);
+Object.defineProperty(exports, "createEyevinnIntercomManagerInstance", ({ enumerable: true, get: function () { return eyevinn_intercom_manager_1.createEyevinnIntercomManagerInstance; } }));
+Object.defineProperty(exports, "removeEyevinnIntercomManagerInstance", ({ enumerable: true, get: function () { return eyevinn_intercom_manager_1.removeEyevinnIntercomManagerInstance; } }));
+Object.defineProperty(exports, "getEyevinnIntercomManagerInstance", ({ enumerable: true, get: function () { return eyevinn_intercom_manager_1.getEyevinnIntercomManagerInstance; } }));
+var valkey_io_valkey_1 = __nccwpck_require__(6638);
+Object.defineProperty(exports, "createValkeyIoValkeyInstance", ({ enumerable: true, get: function () { return valkey_io_valkey_1.createValkeyIoValkeyInstance; } }));
+Object.defineProperty(exports, "removeValkeyIoValkeyInstance", ({ enumerable: true, get: function () { return valkey_io_valkey_1.removeValkeyIoValkeyInstance; } }));
+Object.defineProperty(exports, "getValkeyIoValkeyInstance", ({ enumerable: true, get: function () { return valkey_io_valkey_1.getValkeyIoValkeyInstance; } }));
+var eyevinn_srt_whep_1 = __nccwpck_require__(475);
+Object.defineProperty(exports, "createEyevinnSrtWhepInstance", ({ enumerable: true, get: function () { return eyevinn_srt_whep_1.createEyevinnSrtWhepInstance; } }));
+Object.defineProperty(exports, "removeEyevinnSrtWhepInstance", ({ enumerable: true, get: function () { return eyevinn_srt_whep_1.removeEyevinnSrtWhepInstance; } }));
+Object.defineProperty(exports, "getEyevinnSrtWhepInstance", ({ enumerable: true, get: function () { return eyevinn_srt_whep_1.getEyevinnSrtWhepInstance; } }));
+var dash_industry_forum_livesim2_1 = __nccwpck_require__(5397);
+Object.defineProperty(exports, "createDashIndustryForumLivesim2Instance", ({ enumerable: true, get: function () { return dash_industry_forum_livesim2_1.createDashIndustryForumLivesim2Instance; } }));
+Object.defineProperty(exports, "removeDashIndustryForumLivesim2Instance", ({ enumerable: true, get: function () { return dash_industry_forum_livesim2_1.removeDashIndustryForumLivesim2Instance; } }));
+Object.defineProperty(exports, "getDashIndustryForumLivesim2Instance", ({ enumerable: true, get: function () { return dash_industry_forum_livesim2_1.getDashIndustryForumLivesim2Instance; } }));
+var usefathom_fathom_1 = __nccwpck_require__(6552);
+Object.defineProperty(exports, "createUsefathomFathomInstance", ({ enumerable: true, get: function () { return usefathom_fathom_1.createUsefathomFathomInstance; } }));
+Object.defineProperty(exports, "removeUsefathomFathomInstance", ({ enumerable: true, get: function () { return usefathom_fathom_1.removeUsefathomFathomInstance; } }));
+Object.defineProperty(exports, "getUsefathomFathomInstance", ({ enumerable: true, get: function () { return usefathom_fathom_1.getUsefathomFathomInstance; } }));
+var eyevinn_encore_callback_listener_1 = __nccwpck_require__(2548);
+Object.defineProperty(exports, "createEyevinnEncoreCallbackListenerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_callback_listener_1.createEyevinnEncoreCallbackListenerInstance; } }));
+Object.defineProperty(exports, "removeEyevinnEncoreCallbackListenerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_callback_listener_1.removeEyevinnEncoreCallbackListenerInstance; } }));
+Object.defineProperty(exports, "getEyevinnEncoreCallbackListenerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_callback_listener_1.getEyevinnEncoreCallbackListenerInstance; } }));
+var eyevinn_encore_packager_1 = __nccwpck_require__(1238);
+Object.defineProperty(exports, "createEyevinnEncorePackagerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_packager_1.createEyevinnEncorePackagerInstance; } }));
+Object.defineProperty(exports, "removeEyevinnEncorePackagerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_packager_1.removeEyevinnEncorePackagerInstance; } }));
+Object.defineProperty(exports, "getEyevinnEncorePackagerInstance", ({ enumerable: true, get: function () { return eyevinn_encore_packager_1.getEyevinnEncorePackagerInstance; } }));
+var smrchy_rest_rsmq_1 = __nccwpck_require__(9733);
+Object.defineProperty(exports, "createSmrchyRestRsmqInstance", ({ enumerable: true, get: function () { return smrchy_rest_rsmq_1.createSmrchyRestRsmqInstance; } }));
+Object.defineProperty(exports, "removeSmrchyRestRsmqInstance", ({ enumerable: true, get: function () { return smrchy_rest_rsmq_1.removeSmrchyRestRsmqInstance; } }));
+Object.defineProperty(exports, "getSmrchyRestRsmqInstance", ({ enumerable: true, get: function () { return smrchy_rest_rsmq_1.getSmrchyRestRsmqInstance; } }));
+var minio_minio_1 = __nccwpck_require__(907);
+Object.defineProperty(exports, "createMinioMinioInstance", ({ enumerable: true, get: function () { return minio_minio_1.createMinioMinioInstance; } }));
+Object.defineProperty(exports, "removeMinioMinioInstance", ({ enumerable: true, get: function () { return minio_minio_1.removeMinioMinioInstance; } }));
+Object.defineProperty(exports, "getMinioMinioInstance", ({ enumerable: true, get: function () { return minio_minio_1.getMinioMinioInstance; } }));
+var poundifdef_smoothmq_1 = __nccwpck_require__(6417);
+Object.defineProperty(exports, "createPoundifdefSmoothmqInstance", ({ enumerable: true, get: function () { return poundifdef_smoothmq_1.createPoundifdefSmoothmqInstance; } }));
+Object.defineProperty(exports, "removePoundifdefSmoothmqInstance", ({ enumerable: true, get: function () { return poundifdef_smoothmq_1.removePoundifdefSmoothmqInstance; } }));
+Object.defineProperty(exports, "getPoundifdefSmoothmqInstance", ({ enumerable: true, get: function () { return poundifdef_smoothmq_1.getPoundifdefSmoothmqInstance; } }));
+var eyevinn_encore_transfer_1 = __nccwpck_require__(923);
+Object.defineProperty(exports, "createEyevinnEncoreTransferInstance", ({ enumerable: true, get: function () { return eyevinn_encore_transfer_1.createEyevinnEncoreTransferInstance; } }));
+Object.defineProperty(exports, "removeEyevinnEncoreTransferInstance", ({ enumerable: true, get: function () { return eyevinn_encore_transfer_1.removeEyevinnEncoreTransferInstance; } }));
+Object.defineProperty(exports, "getEyevinnEncoreTransferInstance", ({ enumerable: true, get: function () { return eyevinn_encore_transfer_1.getEyevinnEncoreTransferInstance; } }));
+var eyevinn_live_encoding_1 = __nccwpck_require__(8751);
+Object.defineProperty(exports, "createEyevinnLiveEncodingInstance", ({ enumerable: true, get: function () { return eyevinn_live_encoding_1.createEyevinnLiveEncodingInstance; } }));
+Object.defineProperty(exports, "removeEyevinnLiveEncodingInstance", ({ enumerable: true, get: function () { return eyevinn_live_encoding_1.removeEyevinnLiveEncodingInstance; } }));
+Object.defineProperty(exports, "getEyevinnLiveEncodingInstance", ({ enumerable: true, get: function () { return eyevinn_live_encoding_1.getEyevinnLiveEncodingInstance; } }));
+var bwallberg_kings_and_pigs_ts_1 = __nccwpck_require__(251);
+Object.defineProperty(exports, "createBwallbergKingsAndPigsTsInstance", ({ enumerable: true, get: function () { return bwallberg_kings_and_pigs_ts_1.createBwallbergKingsAndPigsTsInstance; } }));
+Object.defineProperty(exports, "removeBwallbergKingsAndPigsTsInstance", ({ enumerable: true, get: function () { return bwallberg_kings_and_pigs_ts_1.removeBwallbergKingsAndPigsTsInstance; } }));
+Object.defineProperty(exports, "getBwallbergKingsAndPigsTsInstance", ({ enumerable: true, get: function () { return bwallberg_kings_and_pigs_ts_1.getBwallbergKingsAndPigsTsInstance; } }));
+var eyevinn_smb_whip_bridge_1 = __nccwpck_require__(5528);
+Object.defineProperty(exports, "createEyevinnSmbWhipBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_smb_whip_bridge_1.createEyevinnSmbWhipBridgeInstance; } }));
+Object.defineProperty(exports, "removeEyevinnSmbWhipBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_smb_whip_bridge_1.removeEyevinnSmbWhipBridgeInstance; } }));
+Object.defineProperty(exports, "getEyevinnSmbWhipBridgeInstance", ({ enumerable: true, get: function () { return eyevinn_smb_whip_bridge_1.getEyevinnSmbWhipBridgeInstance; } }));
+var eyevinn_wrtc_egress_1 = __nccwpck_require__(2503);
+Object.defineProperty(exports, "createEyevinnWrtcEgressInstance", ({ enumerable: true, get: function () { return eyevinn_wrtc_egress_1.createEyevinnWrtcEgressInstance; } }));
+Object.defineProperty(exports, "removeEyevinnWrtcEgressInstance", ({ enumerable: true, get: function () { return eyevinn_wrtc_egress_1.removeEyevinnWrtcEgressInstance; } }));
+Object.defineProperty(exports, "getEyevinnWrtcEgressInstance", ({ enumerable: true, get: function () { return eyevinn_wrtc_egress_1.getEyevinnWrtcEgressInstance; } }));
+var swagger_api_swagger_editor_1 = __nccwpck_require__(7054);
+Object.defineProperty(exports, "createSwaggerApiSwaggerEditorInstance", ({ enumerable: true, get: function () { return swagger_api_swagger_editor_1.createSwaggerApiSwaggerEditorInstance; } }));
+Object.defineProperty(exports, "removeSwaggerApiSwaggerEditorInstance", ({ enumerable: true, get: function () { return swagger_api_swagger_editor_1.removeSwaggerApiSwaggerEditorInstance; } }));
+Object.defineProperty(exports, "getSwaggerApiSwaggerEditorInstance", ({ enumerable: true, get: function () { return swagger_api_swagger_editor_1.getSwaggerApiSwaggerEditorInstance; } }));
+var realeyes_media_moe_replay_1 = __nccwpck_require__(9773);
+Object.defineProperty(exports, "createRealeyesMediaMoeReplayInstance", ({ enumerable: true, get: function () { return realeyes_media_moe_replay_1.createRealeyesMediaMoeReplayInstance; } }));
+Object.defineProperty(exports, "removeRealeyesMediaMoeReplayInstance", ({ enumerable: true, get: function () { return realeyes_media_moe_replay_1.removeRealeyesMediaMoeReplayInstance; } }));
+Object.defineProperty(exports, "getRealeyesMediaMoeReplayInstance", ({ enumerable: true, get: function () { return realeyes_media_moe_replay_1.getRealeyesMediaMoeReplayInstance; } }));
+var itzg_docker_minecraft_server_1 = __nccwpck_require__(4465);
+Object.defineProperty(exports, "createItzgDockerMinecraftServerInstance", ({ enumerable: true, get: function () { return itzg_docker_minecraft_server_1.createItzgDockerMinecraftServerInstance; } }));
+Object.defineProperty(exports, "removeItzgDockerMinecraftServerInstance", ({ enumerable: true, get: function () { return itzg_docker_minecraft_server_1.removeItzgDockerMinecraftServerInstance; } }));
+Object.defineProperty(exports, "getItzgDockerMinecraftServerInstance", ({ enumerable: true, get: function () { return itzg_docker_minecraft_server_1.getItzgDockerMinecraftServerInstance; } }));
+var birme_lambda_1 = __nccwpck_require__(3677);
+Object.defineProperty(exports, "createBirmeLambdaInstance", ({ enumerable: true, get: function () { return birme_lambda_1.createBirmeLambdaInstance; } }));
+Object.defineProperty(exports, "removeBirmeLambdaInstance", ({ enumerable: true, get: function () { return birme_lambda_1.removeBirmeLambdaInstance; } }));
+Object.defineProperty(exports, "getBirmeLambdaInstance", ({ enumerable: true, get: function () { return birme_lambda_1.getBirmeLambdaInstance; } }));
+var linuxserver_docker_mariadb_1 = __nccwpck_require__(7257);
+Object.defineProperty(exports, "createLinuxserverDockerMariadbInstance", ({ enumerable: true, get: function () { return linuxserver_docker_mariadb_1.createLinuxserverDockerMariadbInstance; } }));
+Object.defineProperty(exports, "removeLinuxserverDockerMariadbInstance", ({ enumerable: true, get: function () { return linuxserver_docker_mariadb_1.removeLinuxserverDockerMariadbInstance; } }));
+Object.defineProperty(exports, "getLinuxserverDockerMariadbInstance", ({ enumerable: true, get: function () { return linuxserver_docker_mariadb_1.getLinuxserverDockerMariadbInstance; } }));
+var alexbj75_movierecommendator_1 = __nccwpck_require__(9075);
+Object.defineProperty(exports, "createAlexbj75MovierecommendatorInstance", ({ enumerable: true, get: function () { return alexbj75_movierecommendator_1.createAlexbj75MovierecommendatorInstance; } }));
+Object.defineProperty(exports, "removeAlexbj75MovierecommendatorInstance", ({ enumerable: true, get: function () { return alexbj75_movierecommendator_1.removeAlexbj75MovierecommendatorInstance; } }));
+Object.defineProperty(exports, "getAlexbj75MovierecommendatorInstance", ({ enumerable: true, get: function () { return alexbj75_movierecommendator_1.getAlexbj75MovierecommendatorInstance; } }));
+var birme_contact_form_svc_1 = __nccwpck_require__(2000);
+Object.defineProperty(exports, "createBirmeContactFormSvcInstance", ({ enumerable: true, get: function () { return birme_contact_form_svc_1.createBirmeContactFormSvcInstance; } }));
+Object.defineProperty(exports, "removeBirmeContactFormSvcInstance", ({ enumerable: true, get: function () { return birme_contact_form_svc_1.removeBirmeContactFormSvcInstance; } }));
+Object.defineProperty(exports, "getBirmeContactFormSvcInstance", ({ enumerable: true, get: function () { return birme_contact_form_svc_1.getBirmeContactFormSvcInstance; } }));
+var birme_captcha_svc_1 = __nccwpck_require__(7597);
+Object.defineProperty(exports, "createBirmeCaptchaSvcInstance", ({ enumerable: true, get: function () { return birme_captcha_svc_1.createBirmeCaptchaSvcInstance; } }));
+Object.defineProperty(exports, "removeBirmeCaptchaSvcInstance", ({ enumerable: true, get: function () { return birme_captcha_svc_1.removeBirmeCaptchaSvcInstance; } }));
+Object.defineProperty(exports, "getBirmeCaptchaSvcInstance", ({ enumerable: true, get: function () { return birme_captcha_svc_1.getBirmeCaptchaSvcInstance; } }));
+var alexbj75_90stv_1 = __nccwpck_require__(5489);
+Object.defineProperty(exports, "createAlexbj7590stvInstance", ({ enumerable: true, get: function () { return alexbj75_90stv_1.createAlexbj7590stvInstance; } }));
+Object.defineProperty(exports, "removeAlexbj7590stvInstance", ({ enumerable: true, get: function () { return alexbj75_90stv_1.removeAlexbj7590stvInstance; } }));
+Object.defineProperty(exports, "getAlexbj7590stvInstance", ({ enumerable: true, get: function () { return alexbj75_90stv_1.getAlexbj7590stvInstance; } }));
+var anderswassen_chaosproxy_config_1 = __nccwpck_require__(9554);
+Object.defineProperty(exports, "createAnderswassenChaosproxyConfigInstance", ({ enumerable: true, get: function () { return anderswassen_chaosproxy_config_1.createAnderswassenChaosproxyConfigInstance; } }));
+Object.defineProperty(exports, "removeAnderswassenChaosproxyConfigInstance", ({ enumerable: true, get: function () { return anderswassen_chaosproxy_config_1.removeAnderswassenChaosproxyConfigInstance; } }));
+Object.defineProperty(exports, "getAnderswassenChaosproxyConfigInstance", ({ enumerable: true, get: function () { return anderswassen_chaosproxy_config_1.getAnderswassenChaosproxyConfigInstance; } }));
+var wordpress_wordpress_1 = __nccwpck_require__(2911);
+Object.defineProperty(exports, "createWordpressWordpressInstance", ({ enumerable: true, get: function () { return wordpress_wordpress_1.createWordpressWordpressInstance; } }));
+Object.defineProperty(exports, "removeWordpressWordpressInstance", ({ enumerable: true, get: function () { return wordpress_wordpress_1.removeWordpressWordpressInstance; } }));
+Object.defineProperty(exports, "getWordpressWordpressInstance", ({ enumerable: true, get: function () { return wordpress_wordpress_1.getWordpressWordpressInstance; } }));
+var olawalejuwonm_anomalydetector_1 = __nccwpck_require__(3439);
+Object.defineProperty(exports, "createOlawalejuwonmAnomalydetectorInstance", ({ enumerable: true, get: function () { return olawalejuwonm_anomalydetector_1.createOlawalejuwonmAnomalydetectorInstance; } }));
+Object.defineProperty(exports, "removeOlawalejuwonmAnomalydetectorInstance", ({ enumerable: true, get: function () { return olawalejuwonm_anomalydetector_1.removeOlawalejuwonmAnomalydetectorInstance; } }));
+Object.defineProperty(exports, "getOlawalejuwonmAnomalydetectorInstance", ({ enumerable: true, get: function () { return olawalejuwonm_anomalydetector_1.getOlawalejuwonmAnomalydetectorInstance; } }));
+var atmoz_sftp_1 = __nccwpck_require__(1565);
+Object.defineProperty(exports, "createAtmozSftpInstance", ({ enumerable: true, get: function () { return atmoz_sftp_1.createAtmozSftpInstance; } }));
+Object.defineProperty(exports, "removeAtmozSftpInstance", ({ enumerable: true, get: function () { return atmoz_sftp_1.removeAtmozSftpInstance; } }));
+Object.defineProperty(exports, "getAtmozSftpInstance", ({ enumerable: true, get: function () { return atmoz_sftp_1.getAtmozSftpInstance; } }));
+var joeldelpilar_tic_tac_vue_1 = __nccwpck_require__(994);
+Object.defineProperty(exports, "createJoeldelpilarTicTacVueInstance", ({ enumerable: true, get: function () { return joeldelpilar_tic_tac_vue_1.createJoeldelpilarTicTacVueInstance; } }));
+Object.defineProperty(exports, "removeJoeldelpilarTicTacVueInstance", ({ enumerable: true, get: function () { return joeldelpilar_tic_tac_vue_1.removeJoeldelpilarTicTacVueInstance; } }));
+Object.defineProperty(exports, "getJoeldelpilarTicTacVueInstance", ({ enumerable: true, get: function () { return joeldelpilar_tic_tac_vue_1.getJoeldelpilarTicTacVueInstance; } }));
+var eyevinn_qr_generator_1 = __nccwpck_require__(1836);
+Object.defineProperty(exports, "createEyevinnQrGeneratorInstance", ({ enumerable: true, get: function () { return eyevinn_qr_generator_1.createEyevinnQrGeneratorInstance; } }));
+Object.defineProperty(exports, "removeEyevinnQrGeneratorInstance", ({ enumerable: true, get: function () { return eyevinn_qr_generator_1.removeEyevinnQrGeneratorInstance; } }));
+Object.defineProperty(exports, "getEyevinnQrGeneratorInstance", ({ enumerable: true, get: function () { return eyevinn_qr_generator_1.getEyevinnQrGeneratorInstance; } }));
+var eyevinn_app_config_svc_1 = __nccwpck_require__(1408);
+Object.defineProperty(exports, "createEyevinnAppConfigSvcInstance", ({ enumerable: true, get: function () { return eyevinn_app_config_svc_1.createEyevinnAppConfigSvcInstance; } }));
+Object.defineProperty(exports, "removeEyevinnAppConfigSvcInstance", ({ enumerable: true, get: function () { return eyevinn_app_config_svc_1.removeEyevinnAppConfigSvcInstance; } }));
+Object.defineProperty(exports, "getEyevinnAppConfigSvcInstance", ({ enumerable: true, get: function () { return eyevinn_app_config_svc_1.getEyevinnAppConfigSvcInstance; } }));
+var ernestocarocca_hello_world_1 = __nccwpck_require__(4214);
+Object.defineProperty(exports, "createErnestocaroccaHelloWorldInstance", ({ enumerable: true, get: function () { return ernestocarocca_hello_world_1.createErnestocaroccaHelloWorldInstance; } }));
+Object.defineProperty(exports, "removeErnestocaroccaHelloWorldInstance", ({ enumerable: true, get: function () { return ernestocarocca_hello_world_1.removeErnestocaroccaHelloWorldInstance; } }));
+Object.defineProperty(exports, "getErnestocaroccaHelloWorldInstance", ({ enumerable: true, get: function () { return ernestocarocca_hello_world_1.getErnestocaroccaHelloWorldInstance; } }));
+var chambana_net_docker_podcastgen_1 = __nccwpck_require__(1519);
+Object.defineProperty(exports, "createChambanaNetDockerPodcastgenInstance", ({ enumerable: true, get: function () { return chambana_net_docker_podcastgen_1.createChambanaNetDockerPodcastgenInstance; } }));
+Object.defineProperty(exports, "removeChambanaNetDockerPodcastgenInstance", ({ enumerable: true, get: function () { return chambana_net_docker_podcastgen_1.removeChambanaNetDockerPodcastgenInstance; } }));
+Object.defineProperty(exports, "getChambanaNetDockerPodcastgenInstance", ({ enumerable: true, get: function () { return chambana_net_docker_podcastgen_1.getChambanaNetDockerPodcastgenInstance; } }));
+var andersnas_nodecat_1 = __nccwpck_require__(5880);
+Object.defineProperty(exports, "createAndersnasNodecatInstance", ({ enumerable: true, get: function () { return andersnas_nodecat_1.createAndersnasNodecatInstance; } }));
+Object.defineProperty(exports, "removeAndersnasNodecatInstance", ({ enumerable: true, get: function () { return andersnas_nodecat_1.removeAndersnasNodecatInstance; } }));
+Object.defineProperty(exports, "getAndersnasNodecatInstance", ({ enumerable: true, get: function () { return andersnas_nodecat_1.getAndersnasNodecatInstance; } }));
+var birme_osc_postgresql_1 = __nccwpck_require__(8902);
+Object.defineProperty(exports, "createBirmeOscPostgresqlInstance", ({ enumerable: true, get: function () { return birme_osc_postgresql_1.createBirmeOscPostgresqlInstance; } }));
+Object.defineProperty(exports, "removeBirmeOscPostgresqlInstance", ({ enumerable: true, get: function () { return birme_osc_postgresql_1.removeBirmeOscPostgresqlInstance; } }));
+Object.defineProperty(exports, "getBirmeOscPostgresqlInstance", ({ enumerable: true, get: function () { return birme_osc_postgresql_1.getBirmeOscPostgresqlInstance; } }));
+var salesagility_suitecrm_1 = __nccwpck_require__(8660);
+Object.defineProperty(exports, "createSalesagilitySuitecrmInstance", ({ enumerable: true, get: function () { return salesagility_suitecrm_1.createSalesagilitySuitecrmInstance; } }));
+Object.defineProperty(exports, "removeSalesagilitySuitecrmInstance", ({ enumerable: true, get: function () { return salesagility_suitecrm_1.removeSalesagilitySuitecrmInstance; } }));
+Object.defineProperty(exports, "getSalesagilitySuitecrmInstance", ({ enumerable: true, get: function () { return salesagility_suitecrm_1.getSalesagilitySuitecrmInstance; } }));
+var eyevinn_docker_testsrc_hls_live_1 = __nccwpck_require__(755);
+Object.defineProperty(exports, "createEyevinnDockerTestsrcHlsLiveInstance", ({ enumerable: true, get: function () { return eyevinn_docker_testsrc_hls_live_1.createEyevinnDockerTestsrcHlsLiveInstance; } }));
+Object.defineProperty(exports, "removeEyevinnDockerTestsrcHlsLiveInstance", ({ enumerable: true, get: function () { return eyevinn_docker_testsrc_hls_live_1.removeEyevinnDockerTestsrcHlsLiveInstance; } }));
+Object.defineProperty(exports, "getEyevinnDockerTestsrcHlsLiveInstance", ({ enumerable: true, get: function () { return eyevinn_docker_testsrc_hls_live_1.getEyevinnDockerTestsrcHlsLiveInstance; } }));
+var apache_couchdb_1 = __nccwpck_require__(9563);
+Object.defineProperty(exports, "createApacheCouchdbInstance", ({ enumerable: true, get: function () { return apache_couchdb_1.createApacheCouchdbInstance; } }));
+Object.defineProperty(exports, "removeApacheCouchdbInstance", ({ enumerable: true, get: function () { return apache_couchdb_1.removeApacheCouchdbInstance; } }));
+Object.defineProperty(exports, "getApacheCouchdbInstance", ({ enumerable: true, get: function () { return apache_couchdb_1.getApacheCouchdbInstance; } }));
+var eyevinn_sgai_ad_proxy_1 = __nccwpck_require__(5104);
+Object.defineProperty(exports, "createEyevinnSgaiAdProxyInstance", ({ enumerable: true, get: function () { return eyevinn_sgai_ad_proxy_1.createEyevinnSgaiAdProxyInstance; } }));
+Object.defineProperty(exports, "removeEyevinnSgaiAdProxyInstance", ({ enumerable: true, get: function () { return eyevinn_sgai_ad_proxy_1.removeEyevinnSgaiAdProxyInstance; } }));
+Object.defineProperty(exports, "getEyevinnSgaiAdProxyInstance", ({ enumerable: true, get: function () { return eyevinn_sgai_ad_proxy_1.getEyevinnSgaiAdProxyInstance; } }));
+var mickael_kerjean_filestash_1 = __nccwpck_require__(2619);
+Object.defineProperty(exports, "createMickaelKerjeanFilestashInstance", ({ enumerable: true, get: function () { return mickael_kerjean_filestash_1.createMickaelKerjeanFilestashInstance; } }));
+Object.defineProperty(exports, "removeMickaelKerjeanFilestashInstance", ({ enumerable: true, get: function () { return mickael_kerjean_filestash_1.removeMickaelKerjeanFilestashInstance; } }));
+Object.defineProperty(exports, "getMickaelKerjeanFilestashInstance", ({ enumerable: true, get: function () { return mickael_kerjean_filestash_1.getMickaelKerjeanFilestashInstance; } }));
+var plausible_analytics_1 = __nccwpck_require__(8588);
+Object.defineProperty(exports, "createPlausibleAnalyticsInstance", ({ enumerable: true, get: function () { return plausible_analytics_1.createPlausibleAnalyticsInstance; } }));
+Object.defineProperty(exports, "removePlausibleAnalyticsInstance", ({ enumerable: true, get: function () { return plausible_analytics_1.removePlausibleAnalyticsInstance; } }));
+Object.defineProperty(exports, "getPlausibleAnalyticsInstance", ({ enumerable: true, get: function () { return plausible_analytics_1.getPlausibleAnalyticsInstance; } }));
+var bluesky_social_pds_1 = __nccwpck_require__(5323);
+Object.defineProperty(exports, "createBlueskySocialPdsInstance", ({ enumerable: true, get: function () { return bluesky_social_pds_1.createBlueskySocialPdsInstance; } }));
+Object.defineProperty(exports, "removeBlueskySocialPdsInstance", ({ enumerable: true, get: function () { return bluesky_social_pds_1.removeBlueskySocialPdsInstance; } }));
+Object.defineProperty(exports, "getBlueskySocialPdsInstance", ({ enumerable: true, get: function () { return bluesky_social_pds_1.getBlueskySocialPdsInstance; } }));
+var docusealco_docuseal_1 = __nccwpck_require__(2331);
+Object.defineProperty(exports, "createDocusealcoDocusealInstance", ({ enumerable: true, get: function () { return docusealco_docuseal_1.createDocusealcoDocusealInstance; } }));
+Object.defineProperty(exports, "removeDocusealcoDocusealInstance", ({ enumerable: true, get: function () { return docusealco_docuseal_1.removeDocusealcoDocusealInstance; } }));
+Object.defineProperty(exports, "getDocusealcoDocusealInstance", ({ enumerable: true, get: function () { return docusealco_docuseal_1.getDocusealcoDocusealInstance; } }));
+var eyevinn_pds_admin_1 = __nccwpck_require__(1556);
+Object.defineProperty(exports, "createEyevinnPdsAdminInstance", ({ enumerable: true, get: function () { return eyevinn_pds_admin_1.createEyevinnPdsAdminInstance; } }));
+Object.defineProperty(exports, "removeEyevinnPdsAdminInstance", ({ enumerable: true, get: function () { return eyevinn_pds_admin_1.removeEyevinnPdsAdminInstance; } }));
+Object.defineProperty(exports, "getEyevinnPdsAdminInstance", ({ enumerable: true, get: function () { return eyevinn_pds_admin_1.getEyevinnPdsAdminInstance; } }));
+var eyevinn_ce_sample_webhook_1 = __nccwpck_require__(1846);
+Object.defineProperty(exports, "createEyevinnCeSampleWebhookInstance", ({ enumerable: true, get: function () { return eyevinn_ce_sample_webhook_1.createEyevinnCeSampleWebhookInstance; } }));
+Object.defineProperty(exports, "removeEyevinnCeSampleWebhookInstance", ({ enumerable: true, get: function () { return eyevinn_ce_sample_webhook_1.removeEyevinnCeSampleWebhookInstance; } }));
+Object.defineProperty(exports, "getEyevinnCeSampleWebhookInstance", ({ enumerable: true, get: function () { return eyevinn_ce_sample_webhook_1.getEyevinnCeSampleWebhookInstance; } }));
+var drawdb_io_drawdb_1 = __nccwpck_require__(9442);
+Object.defineProperty(exports, "createDrawdbIoDrawdbInstance", ({ enumerable: true, get: function () { return drawdb_io_drawdb_1.createDrawdbIoDrawdbInstance; } }));
+Object.defineProperty(exports, "removeDrawdbIoDrawdbInstance", ({ enumerable: true, get: function () { return drawdb_io_drawdb_1.removeDrawdbIoDrawdbInstance; } }));
+Object.defineProperty(exports, "getDrawdbIoDrawdbInstance", ({ enumerable: true, get: function () { return drawdb_io_drawdb_1.getDrawdbIoDrawdbInstance; } }));
+var eyevinn_ai_code_reviewer_1 = __nccwpck_require__(4571);
+Object.defineProperty(exports, "createEyevinnAiCodeReviewerInstance", ({ enumerable: true, get: function () { return eyevinn_ai_code_reviewer_1.createEyevinnAiCodeReviewerInstance; } }));
+Object.defineProperty(exports, "removeEyevinnAiCodeReviewerInstance", ({ enumerable: true, get: function () { return eyevinn_ai_code_reviewer_1.removeEyevinnAiCodeReviewerInstance; } }));
+Object.defineProperty(exports, "getEyevinnAiCodeReviewerInstance", ({ enumerable: true, get: function () { return eyevinn_ai_code_reviewer_1.getEyevinnAiCodeReviewerInstance; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 4412:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+/* module decorator */ module = __nccwpck_require__.nmd(module);
+
+
+const wrapAnsi16 = (fn, offset) => (...args) => {
+	const code = fn(...args);
+	return `\u001B[${code + offset}m`;
+};
+
+const wrapAnsi256 = (fn, offset) => (...args) => {
+	const code = fn(...args);
+	return `\u001B[${38 + offset};5;${code}m`;
+};
+
+const wrapAnsi16m = (fn, offset) => (...args) => {
+	const rgb = fn(...args);
+	return `\u001B[${38 + offset};2;${rgb[0]};${rgb[1]};${rgb[2]}m`;
+};
+
+const ansi2ansi = n => n;
+const rgb2rgb = (r, g, b) => [r, g, b];
+
+const setLazyProperty = (object, property, get) => {
+	Object.defineProperty(object, property, {
+		get: () => {
+			const value = get();
+
+			Object.defineProperty(object, property, {
+				value,
+				enumerable: true,
+				configurable: true
+			});
+
+			return value;
+		},
+		enumerable: true,
+		configurable: true
+	});
+};
+
+/** @type {typeof import('color-convert')} */
+let colorConvert;
+const makeDynamicStyles = (wrap, targetSpace, identity, isBackground) => {
+	if (colorConvert === undefined) {
+		colorConvert = __nccwpck_require__(4185);
+	}
+
+	const offset = isBackground ? 10 : 0;
+	const styles = {};
+
+	for (const [sourceSpace, suite] of Object.entries(colorConvert)) {
+		const name = sourceSpace === 'ansi16' ? 'ansi' : sourceSpace;
+		if (sourceSpace === targetSpace) {
+			styles[name] = wrap(identity, offset);
+		} else if (typeof suite === 'object') {
+			styles[name] = wrap(suite[targetSpace], offset);
+		}
+	}
+
+	return styles;
+};
+
+function assembleStyles() {
+	const codes = new Map();
+	const styles = {
+		modifier: {
+			reset: [0, 0],
+			// 21 isn't widely supported and 22 does the same thing
+			bold: [1, 22],
+			dim: [2, 22],
+			italic: [3, 23],
+			underline: [4, 24],
+			inverse: [7, 27],
+			hidden: [8, 28],
+			strikethrough: [9, 29]
+		},
+		color: {
+			black: [30, 39],
+			red: [31, 39],
+			green: [32, 39],
+			yellow: [33, 39],
+			blue: [34, 39],
+			magenta: [35, 39],
+			cyan: [36, 39],
+			white: [37, 39],
+
+			// Bright color
+			blackBright: [90, 39],
+			redBright: [91, 39],
+			greenBright: [92, 39],
+			yellowBright: [93, 39],
+			blueBright: [94, 39],
+			magentaBright: [95, 39],
+			cyanBright: [96, 39],
+			whiteBright: [97, 39]
+		},
+		bgColor: {
+			bgBlack: [40, 49],
+			bgRed: [41, 49],
+			bgGreen: [42, 49],
+			bgYellow: [43, 49],
+			bgBlue: [44, 49],
+			bgMagenta: [45, 49],
+			bgCyan: [46, 49],
+			bgWhite: [47, 49],
+
+			// Bright color
+			bgBlackBright: [100, 49],
+			bgRedBright: [101, 49],
+			bgGreenBright: [102, 49],
+			bgYellowBright: [103, 49],
+			bgBlueBright: [104, 49],
+			bgMagentaBright: [105, 49],
+			bgCyanBright: [106, 49],
+			bgWhiteBright: [107, 49]
+		}
+	};
+
+	// Alias bright black as gray (and grey)
+	styles.color.gray = styles.color.blackBright;
+	styles.bgColor.bgGray = styles.bgColor.bgBlackBright;
+	styles.color.grey = styles.color.blackBright;
+	styles.bgColor.bgGrey = styles.bgColor.bgBlackBright;
+
+	for (const [groupName, group] of Object.entries(styles)) {
+		for (const [styleName, style] of Object.entries(group)) {
+			styles[styleName] = {
+				open: `\u001B[${style[0]}m`,
+				close: `\u001B[${style[1]}m`
+			};
+
+			group[styleName] = styles[styleName];
+
+			codes.set(style[0], style[1]);
+		}
+
+		Object.defineProperty(styles, groupName, {
+			value: group,
+			enumerable: false
+		});
+	}
+
+	Object.defineProperty(styles, 'codes', {
+		value: codes,
+		enumerable: false
+	});
+
+	styles.color.close = '\u001B[39m';
+	styles.bgColor.close = '\u001B[49m';
+
+	setLazyProperty(styles.color, 'ansi', () => makeDynamicStyles(wrapAnsi16, 'ansi16', ansi2ansi, false));
+	setLazyProperty(styles.color, 'ansi256', () => makeDynamicStyles(wrapAnsi256, 'ansi256', ansi2ansi, false));
+	setLazyProperty(styles.color, 'ansi16m', () => makeDynamicStyles(wrapAnsi16m, 'rgb', rgb2rgb, false));
+	setLazyProperty(styles.bgColor, 'ansi', () => makeDynamicStyles(wrapAnsi16, 'ansi16', ansi2ansi, true));
+	setLazyProperty(styles.bgColor, 'ansi256', () => makeDynamicStyles(wrapAnsi256, 'ansi256', ansi2ansi, true));
+	setLazyProperty(styles.bgColor, 'ansi16m', () => makeDynamicStyles(wrapAnsi16m, 'rgb', rgb2rgb, true));
+
+	return styles;
+}
+
+// Make the export immutable
+Object.defineProperty(module, 'exports', {
+	enumerable: true,
+	get: assembleStyles
+});
+
+
+/***/ }),
+
+/***/ 465:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const ansiStyles = __nccwpck_require__(4412);
+const {stdout: stdoutColor, stderr: stderrColor} = __nccwpck_require__(1450);
+const {
+	stringReplaceAll,
+	stringEncaseCRLFWithFirstIndex
+} = __nccwpck_require__(8809);
+
+const {isArray} = Array;
+
+// `supportsColor.level` → `ansiStyles.color[name]` mapping
+const levelMapping = [
+	'ansi',
+	'ansi',
+	'ansi256',
+	'ansi16m'
+];
+
+const styles = Object.create(null);
+
+const applyOptions = (object, options = {}) => {
+	if (options.level && !(Number.isInteger(options.level) && options.level >= 0 && options.level <= 3)) {
+		throw new Error('The `level` option should be an integer from 0 to 3');
+	}
+
+	// Detect level if not set manually
+	const colorLevel = stdoutColor ? stdoutColor.level : 0;
+	object.level = options.level === undefined ? colorLevel : options.level;
+};
+
+class ChalkClass {
+	constructor(options) {
+		// eslint-disable-next-line no-constructor-return
+		return chalkFactory(options);
+	}
+}
+
+const chalkFactory = options => {
+	const chalk = {};
+	applyOptions(chalk, options);
+
+	chalk.template = (...arguments_) => chalkTag(chalk.template, ...arguments_);
+
+	Object.setPrototypeOf(chalk, Chalk.prototype);
+	Object.setPrototypeOf(chalk.template, chalk);
+
+	chalk.template.constructor = () => {
+		throw new Error('`chalk.constructor()` is deprecated. Use `new chalk.Instance()` instead.');
+	};
+
+	chalk.template.Instance = ChalkClass;
+
+	return chalk.template;
+};
+
+function Chalk(options) {
+	return chalkFactory(options);
+}
+
+for (const [styleName, style] of Object.entries(ansiStyles)) {
+	styles[styleName] = {
+		get() {
+			const builder = createBuilder(this, createStyler(style.open, style.close, this._styler), this._isEmpty);
+			Object.defineProperty(this, styleName, {value: builder});
+			return builder;
+		}
+	};
+}
+
+styles.visible = {
+	get() {
+		const builder = createBuilder(this, this._styler, true);
+		Object.defineProperty(this, 'visible', {value: builder});
+		return builder;
+	}
+};
+
+const usedModels = ['rgb', 'hex', 'keyword', 'hsl', 'hsv', 'hwb', 'ansi', 'ansi256'];
+
+for (const model of usedModels) {
+	styles[model] = {
+		get() {
+			const {level} = this;
+			return function (...arguments_) {
+				const styler = createStyler(ansiStyles.color[levelMapping[level]][model](...arguments_), ansiStyles.color.close, this._styler);
+				return createBuilder(this, styler, this._isEmpty);
+			};
+		}
+	};
+}
+
+for (const model of usedModels) {
+	const bgModel = 'bg' + model[0].toUpperCase() + model.slice(1);
+	styles[bgModel] = {
+		get() {
+			const {level} = this;
+			return function (...arguments_) {
+				const styler = createStyler(ansiStyles.bgColor[levelMapping[level]][model](...arguments_), ansiStyles.bgColor.close, this._styler);
+				return createBuilder(this, styler, this._isEmpty);
+			};
+		}
+	};
+}
+
+const proto = Object.defineProperties(() => {}, {
+	...styles,
+	level: {
+		enumerable: true,
+		get() {
+			return this._generator.level;
+		},
+		set(level) {
+			this._generator.level = level;
+		}
+	}
+});
+
+const createStyler = (open, close, parent) => {
+	let openAll;
+	let closeAll;
+	if (parent === undefined) {
+		openAll = open;
+		closeAll = close;
+	} else {
+		openAll = parent.openAll + open;
+		closeAll = close + parent.closeAll;
+	}
+
+	return {
+		open,
+		close,
+		openAll,
+		closeAll,
+		parent
+	};
+};
+
+const createBuilder = (self, _styler, _isEmpty) => {
+	const builder = (...arguments_) => {
+		if (isArray(arguments_[0]) && isArray(arguments_[0].raw)) {
+			// Called as a template literal, for example: chalk.red`2 + 3 = {bold ${2+3}}`
+			return applyStyle(builder, chalkTag(builder, ...arguments_));
+		}
+
+		// Single argument is hot path, implicit coercion is faster than anything
+		// eslint-disable-next-line no-implicit-coercion
+		return applyStyle(builder, (arguments_.length === 1) ? ('' + arguments_[0]) : arguments_.join(' '));
+	};
+
+	// We alter the prototype because we must return a function, but there is
+	// no way to create a function with a different prototype
+	Object.setPrototypeOf(builder, proto);
+
+	builder._generator = self;
+	builder._styler = _styler;
+	builder._isEmpty = _isEmpty;
+
+	return builder;
+};
+
+const applyStyle = (self, string) => {
+	if (self.level <= 0 || !string) {
+		return self._isEmpty ? '' : string;
+	}
+
+	let styler = self._styler;
+
+	if (styler === undefined) {
+		return string;
+	}
+
+	const {openAll, closeAll} = styler;
+	if (string.indexOf('\u001B') !== -1) {
+		while (styler !== undefined) {
+			// Replace any instances already present with a re-opening code
+			// otherwise only the part of the string until said closing code
+			// will be colored, and the rest will simply be 'plain'.
+			string = stringReplaceAll(string, styler.close, styler.open);
+
+			styler = styler.parent;
+		}
+	}
+
+	// We can move both next actions out of loop, because remaining actions in loop won't have
+	// any/visible effect on parts we add here. Close the styling before a linebreak and reopen
+	// after next line to fix a bleed issue on macOS: https://github.com/chalk/chalk/pull/92
+	const lfIndex = string.indexOf('\n');
+	if (lfIndex !== -1) {
+		string = stringEncaseCRLFWithFirstIndex(string, closeAll, openAll, lfIndex);
+	}
+
+	return openAll + string + closeAll;
+};
+
+let template;
+const chalkTag = (chalk, ...strings) => {
+	const [firstString] = strings;
+
+	if (!isArray(firstString) || !isArray(firstString.raw)) {
+		// If chalk() was called by itself or with a string,
+		// return the string itself as a string.
+		return strings.join(' ');
+	}
+
+	const arguments_ = strings.slice(1);
+	const parts = [firstString.raw[0]];
+
+	for (let i = 1; i < firstString.length; i++) {
+		parts.push(
+			String(arguments_[i - 1]).replace(/[{}\\]/g, '\\$&'),
+			String(firstString.raw[i])
+		);
+	}
+
+	if (template === undefined) {
+		template = __nccwpck_require__(4670);
+	}
+
+	return template(chalk, parts.join(''));
+};
+
+Object.defineProperties(Chalk.prototype, styles);
+
+const chalk = Chalk(); // eslint-disable-line new-cap
+chalk.supportsColor = stdoutColor;
+chalk.stderr = Chalk({level: stderrColor ? stderrColor.level : 0}); // eslint-disable-line new-cap
+chalk.stderr.supportsColor = stderrColor;
+
+module.exports = chalk;
+
+
+/***/ }),
+
+/***/ 4670:
+/***/ ((module) => {
+
+"use strict";
+
+const TEMPLATE_REGEX = /(?:\\(u(?:[a-f\d]{4}|\{[a-f\d]{1,6}\})|x[a-f\d]{2}|.))|(?:\{(~)?(\w+(?:\([^)]*\))?(?:\.\w+(?:\([^)]*\))?)*)(?:[ \t]|(?=\r?\n)))|(\})|((?:.|[\r\n\f])+?)/gi;
+const STYLE_REGEX = /(?:^|\.)(\w+)(?:\(([^)]*)\))?/g;
+const STRING_REGEX = /^(['"])((?:\\.|(?!\1)[^\\])*)\1$/;
+const ESCAPE_REGEX = /\\(u(?:[a-f\d]{4}|{[a-f\d]{1,6}})|x[a-f\d]{2}|.)|([^\\])/gi;
+
+const ESCAPES = new Map([
+	['n', '\n'],
+	['r', '\r'],
+	['t', '\t'],
+	['b', '\b'],
+	['f', '\f'],
+	['v', '\v'],
+	['0', '\0'],
+	['\\', '\\'],
+	['e', '\u001B'],
+	['a', '\u0007']
+]);
+
+function unescape(c) {
+	const u = c[0] === 'u';
+	const bracket = c[1] === '{';
+
+	if ((u && !bracket && c.length === 5) || (c[0] === 'x' && c.length === 3)) {
+		return String.fromCharCode(parseInt(c.slice(1), 16));
+	}
+
+	if (u && bracket) {
+		return String.fromCodePoint(parseInt(c.slice(2, -1), 16));
+	}
+
+	return ESCAPES.get(c) || c;
+}
+
+function parseArguments(name, arguments_) {
+	const results = [];
+	const chunks = arguments_.trim().split(/\s*,\s*/g);
+	let matches;
+
+	for (const chunk of chunks) {
+		const number = Number(chunk);
+		if (!Number.isNaN(number)) {
+			results.push(number);
+		} else if ((matches = chunk.match(STRING_REGEX))) {
+			results.push(matches[2].replace(ESCAPE_REGEX, (m, escape, character) => escape ? unescape(escape) : character));
+		} else {
+			throw new Error(`Invalid Chalk template style argument: ${chunk} (in style '${name}')`);
+		}
+	}
+
+	return results;
+}
+
+function parseStyle(style) {
+	STYLE_REGEX.lastIndex = 0;
+
+	const results = [];
+	let matches;
+
+	while ((matches = STYLE_REGEX.exec(style)) !== null) {
+		const name = matches[1];
+
+		if (matches[2]) {
+			const args = parseArguments(name, matches[2]);
+			results.push([name].concat(args));
+		} else {
+			results.push([name]);
+		}
+	}
+
+	return results;
+}
+
+function buildStyle(chalk, styles) {
+	const enabled = {};
+
+	for (const layer of styles) {
+		for (const style of layer.styles) {
+			enabled[style[0]] = layer.inverse ? null : style.slice(1);
+		}
+	}
+
+	let current = chalk;
+	for (const [styleName, styles] of Object.entries(enabled)) {
+		if (!Array.isArray(styles)) {
+			continue;
+		}
+
+		if (!(styleName in current)) {
+			throw new Error(`Unknown Chalk style: ${styleName}`);
+		}
+
+		current = styles.length > 0 ? current[styleName](...styles) : current[styleName];
+	}
+
+	return current;
+}
+
+module.exports = (chalk, temporary) => {
+	const styles = [];
+	const chunks = [];
+	let chunk = [];
+
+	// eslint-disable-next-line max-params
+	temporary.replace(TEMPLATE_REGEX, (m, escapeCharacter, inverse, style, close, character) => {
+		if (escapeCharacter) {
+			chunk.push(unescape(escapeCharacter));
+		} else if (style) {
+			const string = chunk.join('');
+			chunk = [];
+			chunks.push(styles.length === 0 ? string : buildStyle(chalk, styles)(string));
+			styles.push({inverse, styles: parseStyle(style)});
+		} else if (close) {
+			if (styles.length === 0) {
+				throw new Error('Found extraneous } in Chalk template literal');
+			}
+
+			chunks.push(buildStyle(chalk, styles)(chunk.join('')));
+			chunk = [];
+			styles.pop();
+		} else {
+			chunk.push(character);
+		}
+	});
+
+	chunks.push(chunk.join(''));
+
+	if (styles.length > 0) {
+		const errMessage = `Chalk template literal is missing ${styles.length} closing bracket${styles.length === 1 ? '' : 's'} (\`}\`)`;
+		throw new Error(errMessage);
+	}
+
+	return chunks.join('');
+};
+
+
+/***/ }),
+
+/***/ 8809:
+/***/ ((module) => {
+
+"use strict";
+
+
+const stringReplaceAll = (string, substring, replacer) => {
+	let index = string.indexOf(substring);
+	if (index === -1) {
+		return string;
+	}
+
+	const substringLength = substring.length;
+	let endIndex = 0;
+	let returnValue = '';
+	do {
+		returnValue += string.substr(endIndex, index - endIndex) + substring + replacer;
+		endIndex = index + substringLength;
+		index = string.indexOf(substring, endIndex);
+	} while (index !== -1);
+
+	returnValue += string.substr(endIndex);
+	return returnValue;
+};
+
+const stringEncaseCRLFWithFirstIndex = (string, prefix, postfix, index) => {
+	let endIndex = 0;
+	let returnValue = '';
+	do {
+		const gotCR = string[index - 1] === '\r';
+		returnValue += string.substr(endIndex, (gotCR ? index - 1 : index) - endIndex) + prefix + (gotCR ? '\r\n' : '\n') + postfix;
+		endIndex = index + 1;
+		index = string.indexOf('\n', endIndex);
+	} while (index !== -1);
+
+	returnValue += string.substr(endIndex);
+	return returnValue;
+};
+
+module.exports = {
+	stringReplaceAll,
+	stringEncaseCRLFWithFirstIndex
+};
+
+
+/***/ }),
+
+/***/ 6872:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+/* MIT license */
+/* eslint-disable no-mixed-operators */
+const cssKeywords = __nccwpck_require__(4953);
+
+// NOTE: conversions should only return primitive values (i.e. arrays, or
+//       values that give correct `typeof` results).
+//       do not use box values types (i.e. Number(), String(), etc.)
+
+const reverseKeywords = {};
+for (const key of Object.keys(cssKeywords)) {
+	reverseKeywords[cssKeywords[key]] = key;
+}
+
+const convert = {
+	rgb: {channels: 3, labels: 'rgb'},
+	hsl: {channels: 3, labels: 'hsl'},
+	hsv: {channels: 3, labels: 'hsv'},
+	hwb: {channels: 3, labels: 'hwb'},
+	cmyk: {channels: 4, labels: 'cmyk'},
+	xyz: {channels: 3, labels: 'xyz'},
+	lab: {channels: 3, labels: 'lab'},
+	lch: {channels: 3, labels: 'lch'},
+	hex: {channels: 1, labels: ['hex']},
+	keyword: {channels: 1, labels: ['keyword']},
+	ansi16: {channels: 1, labels: ['ansi16']},
+	ansi256: {channels: 1, labels: ['ansi256']},
+	hcg: {channels: 3, labels: ['h', 'c', 'g']},
+	apple: {channels: 3, labels: ['r16', 'g16', 'b16']},
+	gray: {channels: 1, labels: ['gray']}
+};
+
+module.exports = convert;
+
+// Hide .channels and .labels properties
+for (const model of Object.keys(convert)) {
+	if (!('channels' in convert[model])) {
+		throw new Error('missing channels property: ' + model);
+	}
+
+	if (!('labels' in convert[model])) {
+		throw new Error('missing channel labels property: ' + model);
+	}
+
+	if (convert[model].labels.length !== convert[model].channels) {
+		throw new Error('channel and label counts mismatch: ' + model);
+	}
+
+	const {channels, labels} = convert[model];
+	delete convert[model].channels;
+	delete convert[model].labels;
+	Object.defineProperty(convert[model], 'channels', {value: channels});
+	Object.defineProperty(convert[model], 'labels', {value: labels});
+}
+
+convert.rgb.hsl = function (rgb) {
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
+	const min = Math.min(r, g, b);
+	const max = Math.max(r, g, b);
+	const delta = max - min;
+	let h;
+	let s;
+
+	if (max === min) {
+		h = 0;
+	} else if (r === max) {
+		h = (g - b) / delta;
+	} else if (g === max) {
+		h = 2 + (b - r) / delta;
+	} else if (b === max) {
+		h = 4 + (r - g) / delta;
+	}
+
+	h = Math.min(h * 60, 360);
+
+	if (h < 0) {
+		h += 360;
+	}
+
+	const l = (min + max) / 2;
+
+	if (max === min) {
+		s = 0;
+	} else if (l <= 0.5) {
+		s = delta / (max + min);
+	} else {
+		s = delta / (2 - max - min);
+	}
+
+	return [h, s * 100, l * 100];
+};
+
+convert.rgb.hsv = function (rgb) {
+	let rdif;
+	let gdif;
+	let bdif;
+	let h;
+	let s;
+
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
+	const v = Math.max(r, g, b);
+	const diff = v - Math.min(r, g, b);
+	const diffc = function (c) {
+		return (v - c) / 6 / diff + 1 / 2;
+	};
+
+	if (diff === 0) {
+		h = 0;
+		s = 0;
+	} else {
+		s = diff / v;
+		rdif = diffc(r);
+		gdif = diffc(g);
+		bdif = diffc(b);
+
+		if (r === v) {
+			h = bdif - gdif;
+		} else if (g === v) {
+			h = (1 / 3) + rdif - bdif;
+		} else if (b === v) {
+			h = (2 / 3) + gdif - rdif;
+		}
+
+		if (h < 0) {
+			h += 1;
+		} else if (h > 1) {
+			h -= 1;
+		}
+	}
+
+	return [
+		h * 360,
+		s * 100,
+		v * 100
+	];
+};
+
+convert.rgb.hwb = function (rgb) {
+	const r = rgb[0];
+	const g = rgb[1];
+	let b = rgb[2];
+	const h = convert.rgb.hsl(rgb)[0];
+	const w = 1 / 255 * Math.min(r, Math.min(g, b));
+
+	b = 1 - 1 / 255 * Math.max(r, Math.max(g, b));
+
+	return [h, w * 100, b * 100];
+};
+
+convert.rgb.cmyk = function (rgb) {
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
+
+	const k = Math.min(1 - r, 1 - g, 1 - b);
+	const c = (1 - r - k) / (1 - k) || 0;
+	const m = (1 - g - k) / (1 - k) || 0;
+	const y = (1 - b - k) / (1 - k) || 0;
+
+	return [c * 100, m * 100, y * 100, k * 100];
+};
+
+function comparativeDistance(x, y) {
+	/*
+		See https://en.m.wikipedia.org/wiki/Euclidean_distance#Squared_Euclidean_distance
+	*/
+	return (
+		((x[0] - y[0]) ** 2) +
+		((x[1] - y[1]) ** 2) +
+		((x[2] - y[2]) ** 2)
+	);
+}
+
+convert.rgb.keyword = function (rgb) {
+	const reversed = reverseKeywords[rgb];
+	if (reversed) {
+		return reversed;
+	}
+
+	let currentClosestDistance = Infinity;
+	let currentClosestKeyword;
+
+	for (const keyword of Object.keys(cssKeywords)) {
+		const value = cssKeywords[keyword];
+
+		// Compute comparative distance
+		const distance = comparativeDistance(rgb, value);
+
+		// Check if its less, if so set as closest
+		if (distance < currentClosestDistance) {
+			currentClosestDistance = distance;
+			currentClosestKeyword = keyword;
+		}
+	}
+
+	return currentClosestKeyword;
+};
+
+convert.keyword.rgb = function (keyword) {
+	return cssKeywords[keyword];
+};
+
+convert.rgb.xyz = function (rgb) {
+	let r = rgb[0] / 255;
+	let g = rgb[1] / 255;
+	let b = rgb[2] / 255;
+
+	// Assume sRGB
+	r = r > 0.04045 ? (((r + 0.055) / 1.055) ** 2.4) : (r / 12.92);
+	g = g > 0.04045 ? (((g + 0.055) / 1.055) ** 2.4) : (g / 12.92);
+	b = b > 0.04045 ? (((b + 0.055) / 1.055) ** 2.4) : (b / 12.92);
+
+	const x = (r * 0.4124) + (g * 0.3576) + (b * 0.1805);
+	const y = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+	const z = (r * 0.0193) + (g * 0.1192) + (b * 0.9505);
+
+	return [x * 100, y * 100, z * 100];
+};
+
+convert.rgb.lab = function (rgb) {
+	const xyz = convert.rgb.xyz(rgb);
+	let x = xyz[0];
+	let y = xyz[1];
+	let z = xyz[2];
+
+	x /= 95.047;
+	y /= 100;
+	z /= 108.883;
+
+	x = x > 0.008856 ? (x ** (1 / 3)) : (7.787 * x) + (16 / 116);
+	y = y > 0.008856 ? (y ** (1 / 3)) : (7.787 * y) + (16 / 116);
+	z = z > 0.008856 ? (z ** (1 / 3)) : (7.787 * z) + (16 / 116);
+
+	const l = (116 * y) - 16;
+	const a = 500 * (x - y);
+	const b = 200 * (y - z);
+
+	return [l, a, b];
+};
+
+convert.hsl.rgb = function (hsl) {
+	const h = hsl[0] / 360;
+	const s = hsl[1] / 100;
+	const l = hsl[2] / 100;
+	let t2;
+	let t3;
+	let val;
+
+	if (s === 0) {
+		val = l * 255;
+		return [val, val, val];
+	}
+
+	if (l < 0.5) {
+		t2 = l * (1 + s);
+	} else {
+		t2 = l + s - l * s;
+	}
+
+	const t1 = 2 * l - t2;
+
+	const rgb = [0, 0, 0];
+	for (let i = 0; i < 3; i++) {
+		t3 = h + 1 / 3 * -(i - 1);
+		if (t3 < 0) {
+			t3++;
+		}
+
+		if (t3 > 1) {
+			t3--;
+		}
+
+		if (6 * t3 < 1) {
+			val = t1 + (t2 - t1) * 6 * t3;
+		} else if (2 * t3 < 1) {
+			val = t2;
+		} else if (3 * t3 < 2) {
+			val = t1 + (t2 - t1) * (2 / 3 - t3) * 6;
+		} else {
+			val = t1;
+		}
+
+		rgb[i] = val * 255;
+	}
+
+	return rgb;
+};
+
+convert.hsl.hsv = function (hsl) {
+	const h = hsl[0];
+	let s = hsl[1] / 100;
+	let l = hsl[2] / 100;
+	let smin = s;
+	const lmin = Math.max(l, 0.01);
+
+	l *= 2;
+	s *= (l <= 1) ? l : 2 - l;
+	smin *= lmin <= 1 ? lmin : 2 - lmin;
+	const v = (l + s) / 2;
+	const sv = l === 0 ? (2 * smin) / (lmin + smin) : (2 * s) / (l + s);
+
+	return [h, sv * 100, v * 100];
+};
+
+convert.hsv.rgb = function (hsv) {
+	const h = hsv[0] / 60;
+	const s = hsv[1] / 100;
+	let v = hsv[2] / 100;
+	const hi = Math.floor(h) % 6;
+
+	const f = h - Math.floor(h);
+	const p = 255 * v * (1 - s);
+	const q = 255 * v * (1 - (s * f));
+	const t = 255 * v * (1 - (s * (1 - f)));
+	v *= 255;
+
+	switch (hi) {
+		case 0:
+			return [v, t, p];
+		case 1:
+			return [q, v, p];
+		case 2:
+			return [p, v, t];
+		case 3:
+			return [p, q, v];
+		case 4:
+			return [t, p, v];
+		case 5:
+			return [v, p, q];
+	}
+};
+
+convert.hsv.hsl = function (hsv) {
+	const h = hsv[0];
+	const s = hsv[1] / 100;
+	const v = hsv[2] / 100;
+	const vmin = Math.max(v, 0.01);
+	let sl;
+	let l;
+
+	l = (2 - s) * v;
+	const lmin = (2 - s) * vmin;
+	sl = s * vmin;
+	sl /= (lmin <= 1) ? lmin : 2 - lmin;
+	sl = sl || 0;
+	l /= 2;
+
+	return [h, sl * 100, l * 100];
+};
+
+// http://dev.w3.org/csswg/css-color/#hwb-to-rgb
+convert.hwb.rgb = function (hwb) {
+	const h = hwb[0] / 360;
+	let wh = hwb[1] / 100;
+	let bl = hwb[2] / 100;
+	const ratio = wh + bl;
+	let f;
+
+	// Wh + bl cant be > 1
+	if (ratio > 1) {
+		wh /= ratio;
+		bl /= ratio;
+	}
+
+	const i = Math.floor(6 * h);
+	const v = 1 - bl;
+	f = 6 * h - i;
+
+	if ((i & 0x01) !== 0) {
+		f = 1 - f;
+	}
+
+	const n = wh + f * (v - wh); // Linear interpolation
+
+	let r;
+	let g;
+	let b;
+	/* eslint-disable max-statements-per-line,no-multi-spaces */
+	switch (i) {
+		default:
+		case 6:
+		case 0: r = v;  g = n;  b = wh; break;
+		case 1: r = n;  g = v;  b = wh; break;
+		case 2: r = wh; g = v;  b = n; break;
+		case 3: r = wh; g = n;  b = v; break;
+		case 4: r = n;  g = wh; b = v; break;
+		case 5: r = v;  g = wh; b = n; break;
+	}
+	/* eslint-enable max-statements-per-line,no-multi-spaces */
+
+	return [r * 255, g * 255, b * 255];
+};
+
+convert.cmyk.rgb = function (cmyk) {
+	const c = cmyk[0] / 100;
+	const m = cmyk[1] / 100;
+	const y = cmyk[2] / 100;
+	const k = cmyk[3] / 100;
+
+	const r = 1 - Math.min(1, c * (1 - k) + k);
+	const g = 1 - Math.min(1, m * (1 - k) + k);
+	const b = 1 - Math.min(1, y * (1 - k) + k);
+
+	return [r * 255, g * 255, b * 255];
+};
+
+convert.xyz.rgb = function (xyz) {
+	const x = xyz[0] / 100;
+	const y = xyz[1] / 100;
+	const z = xyz[2] / 100;
+	let r;
+	let g;
+	let b;
+
+	r = (x * 3.2406) + (y * -1.5372) + (z * -0.4986);
+	g = (x * -0.9689) + (y * 1.8758) + (z * 0.0415);
+	b = (x * 0.0557) + (y * -0.2040) + (z * 1.0570);
+
+	// Assume sRGB
+	r = r > 0.0031308
+		? ((1.055 * (r ** (1.0 / 2.4))) - 0.055)
+		: r * 12.92;
+
+	g = g > 0.0031308
+		? ((1.055 * (g ** (1.0 / 2.4))) - 0.055)
+		: g * 12.92;
+
+	b = b > 0.0031308
+		? ((1.055 * (b ** (1.0 / 2.4))) - 0.055)
+		: b * 12.92;
+
+	r = Math.min(Math.max(0, r), 1);
+	g = Math.min(Math.max(0, g), 1);
+	b = Math.min(Math.max(0, b), 1);
+
+	return [r * 255, g * 255, b * 255];
+};
+
+convert.xyz.lab = function (xyz) {
+	let x = xyz[0];
+	let y = xyz[1];
+	let z = xyz[2];
+
+	x /= 95.047;
+	y /= 100;
+	z /= 108.883;
+
+	x = x > 0.008856 ? (x ** (1 / 3)) : (7.787 * x) + (16 / 116);
+	y = y > 0.008856 ? (y ** (1 / 3)) : (7.787 * y) + (16 / 116);
+	z = z > 0.008856 ? (z ** (1 / 3)) : (7.787 * z) + (16 / 116);
+
+	const l = (116 * y) - 16;
+	const a = 500 * (x - y);
+	const b = 200 * (y - z);
+
+	return [l, a, b];
+};
+
+convert.lab.xyz = function (lab) {
+	const l = lab[0];
+	const a = lab[1];
+	const b = lab[2];
+	let x;
+	let y;
+	let z;
+
+	y = (l + 16) / 116;
+	x = a / 500 + y;
+	z = y - b / 200;
+
+	const y2 = y ** 3;
+	const x2 = x ** 3;
+	const z2 = z ** 3;
+	y = y2 > 0.008856 ? y2 : (y - 16 / 116) / 7.787;
+	x = x2 > 0.008856 ? x2 : (x - 16 / 116) / 7.787;
+	z = z2 > 0.008856 ? z2 : (z - 16 / 116) / 7.787;
+
+	x *= 95.047;
+	y *= 100;
+	z *= 108.883;
+
+	return [x, y, z];
+};
+
+convert.lab.lch = function (lab) {
+	const l = lab[0];
+	const a = lab[1];
+	const b = lab[2];
+	let h;
+
+	const hr = Math.atan2(b, a);
+	h = hr * 360 / 2 / Math.PI;
+
+	if (h < 0) {
+		h += 360;
+	}
+
+	const c = Math.sqrt(a * a + b * b);
+
+	return [l, c, h];
+};
+
+convert.lch.lab = function (lch) {
+	const l = lch[0];
+	const c = lch[1];
+	const h = lch[2];
+
+	const hr = h / 360 * 2 * Math.PI;
+	const a = c * Math.cos(hr);
+	const b = c * Math.sin(hr);
+
+	return [l, a, b];
+};
+
+convert.rgb.ansi16 = function (args, saturation = null) {
+	const [r, g, b] = args;
+	let value = saturation === null ? convert.rgb.hsv(args)[2] : saturation; // Hsv -> ansi16 optimization
+
+	value = Math.round(value / 50);
+
+	if (value === 0) {
+		return 30;
+	}
+
+	let ansi = 30
+		+ ((Math.round(b / 255) << 2)
+		| (Math.round(g / 255) << 1)
+		| Math.round(r / 255));
+
+	if (value === 2) {
+		ansi += 60;
+	}
+
+	return ansi;
+};
+
+convert.hsv.ansi16 = function (args) {
+	// Optimization here; we already know the value and don't need to get
+	// it converted for us.
+	return convert.rgb.ansi16(convert.hsv.rgb(args), args[2]);
+};
+
+convert.rgb.ansi256 = function (args) {
+	const r = args[0];
+	const g = args[1];
+	const b = args[2];
+
+	// We use the extended greyscale palette here, with the exception of
+	// black and white. normal palette only has 4 greyscale shades.
+	if (r === g && g === b) {
+		if (r < 8) {
+			return 16;
+		}
+
+		if (r > 248) {
+			return 231;
+		}
+
+		return Math.round(((r - 8) / 247) * 24) + 232;
+	}
+
+	const ansi = 16
+		+ (36 * Math.round(r / 255 * 5))
+		+ (6 * Math.round(g / 255 * 5))
+		+ Math.round(b / 255 * 5);
+
+	return ansi;
+};
+
+convert.ansi16.rgb = function (args) {
+	let color = args % 10;
+
+	// Handle greyscale
+	if (color === 0 || color === 7) {
+		if (args > 50) {
+			color += 3.5;
+		}
+
+		color = color / 10.5 * 255;
+
+		return [color, color, color];
+	}
+
+	const mult = (~~(args > 50) + 1) * 0.5;
+	const r = ((color & 1) * mult) * 255;
+	const g = (((color >> 1) & 1) * mult) * 255;
+	const b = (((color >> 2) & 1) * mult) * 255;
+
+	return [r, g, b];
+};
+
+convert.ansi256.rgb = function (args) {
+	// Handle greyscale
+	if (args >= 232) {
+		const c = (args - 232) * 10 + 8;
+		return [c, c, c];
+	}
+
+	args -= 16;
+
+	let rem;
+	const r = Math.floor(args / 36) / 5 * 255;
+	const g = Math.floor((rem = args % 36) / 6) / 5 * 255;
+	const b = (rem % 6) / 5 * 255;
+
+	return [r, g, b];
+};
+
+convert.rgb.hex = function (args) {
+	const integer = ((Math.round(args[0]) & 0xFF) << 16)
+		+ ((Math.round(args[1]) & 0xFF) << 8)
+		+ (Math.round(args[2]) & 0xFF);
+
+	const string = integer.toString(16).toUpperCase();
+	return '000000'.substring(string.length) + string;
+};
+
+convert.hex.rgb = function (args) {
+	const match = args.toString(16).match(/[a-f0-9]{6}|[a-f0-9]{3}/i);
+	if (!match) {
+		return [0, 0, 0];
+	}
+
+	let colorString = match[0];
+
+	if (match[0].length === 3) {
+		colorString = colorString.split('').map(char => {
+			return char + char;
+		}).join('');
+	}
+
+	const integer = parseInt(colorString, 16);
+	const r = (integer >> 16) & 0xFF;
+	const g = (integer >> 8) & 0xFF;
+	const b = integer & 0xFF;
+
+	return [r, g, b];
+};
+
+convert.rgb.hcg = function (rgb) {
+	const r = rgb[0] / 255;
+	const g = rgb[1] / 255;
+	const b = rgb[2] / 255;
+	const max = Math.max(Math.max(r, g), b);
+	const min = Math.min(Math.min(r, g), b);
+	const chroma = (max - min);
+	let grayscale;
+	let hue;
+
+	if (chroma < 1) {
+		grayscale = min / (1 - chroma);
+	} else {
+		grayscale = 0;
+	}
+
+	if (chroma <= 0) {
+		hue = 0;
+	} else
+	if (max === r) {
+		hue = ((g - b) / chroma) % 6;
+	} else
+	if (max === g) {
+		hue = 2 + (b - r) / chroma;
+	} else {
+		hue = 4 + (r - g) / chroma;
+	}
+
+	hue /= 6;
+	hue %= 1;
+
+	return [hue * 360, chroma * 100, grayscale * 100];
+};
+
+convert.hsl.hcg = function (hsl) {
+	const s = hsl[1] / 100;
+	const l = hsl[2] / 100;
+
+	const c = l < 0.5 ? (2.0 * s * l) : (2.0 * s * (1.0 - l));
+
+	let f = 0;
+	if (c < 1.0) {
+		f = (l - 0.5 * c) / (1.0 - c);
+	}
+
+	return [hsl[0], c * 100, f * 100];
+};
+
+convert.hsv.hcg = function (hsv) {
+	const s = hsv[1] / 100;
+	const v = hsv[2] / 100;
+
+	const c = s * v;
+	let f = 0;
+
+	if (c < 1.0) {
+		f = (v - c) / (1 - c);
+	}
+
+	return [hsv[0], c * 100, f * 100];
+};
+
+convert.hcg.rgb = function (hcg) {
+	const h = hcg[0] / 360;
+	const c = hcg[1] / 100;
+	const g = hcg[2] / 100;
+
+	if (c === 0.0) {
+		return [g * 255, g * 255, g * 255];
+	}
+
+	const pure = [0, 0, 0];
+	const hi = (h % 1) * 6;
+	const v = hi % 1;
+	const w = 1 - v;
+	let mg = 0;
+
+	/* eslint-disable max-statements-per-line */
+	switch (Math.floor(hi)) {
+		case 0:
+			pure[0] = 1; pure[1] = v; pure[2] = 0; break;
+		case 1:
+			pure[0] = w; pure[1] = 1; pure[2] = 0; break;
+		case 2:
+			pure[0] = 0; pure[1] = 1; pure[2] = v; break;
+		case 3:
+			pure[0] = 0; pure[1] = w; pure[2] = 1; break;
+		case 4:
+			pure[0] = v; pure[1] = 0; pure[2] = 1; break;
+		default:
+			pure[0] = 1; pure[1] = 0; pure[2] = w;
+	}
+	/* eslint-enable max-statements-per-line */
+
+	mg = (1.0 - c) * g;
+
+	return [
+		(c * pure[0] + mg) * 255,
+		(c * pure[1] + mg) * 255,
+		(c * pure[2] + mg) * 255
+	];
+};
+
+convert.hcg.hsv = function (hcg) {
+	const c = hcg[1] / 100;
+	const g = hcg[2] / 100;
+
+	const v = c + g * (1.0 - c);
+	let f = 0;
+
+	if (v > 0.0) {
+		f = c / v;
+	}
+
+	return [hcg[0], f * 100, v * 100];
+};
+
+convert.hcg.hsl = function (hcg) {
+	const c = hcg[1] / 100;
+	const g = hcg[2] / 100;
+
+	const l = g * (1.0 - c) + 0.5 * c;
+	let s = 0;
+
+	if (l > 0.0 && l < 0.5) {
+		s = c / (2 * l);
+	} else
+	if (l >= 0.5 && l < 1.0) {
+		s = c / (2 * (1 - l));
+	}
+
+	return [hcg[0], s * 100, l * 100];
+};
+
+convert.hcg.hwb = function (hcg) {
+	const c = hcg[1] / 100;
+	const g = hcg[2] / 100;
+	const v = c + g * (1.0 - c);
+	return [hcg[0], (v - c) * 100, (1 - v) * 100];
+};
+
+convert.hwb.hcg = function (hwb) {
+	const w = hwb[1] / 100;
+	const b = hwb[2] / 100;
+	const v = 1 - b;
+	const c = v - w;
+	let g = 0;
+
+	if (c < 1) {
+		g = (v - c) / (1 - c);
+	}
+
+	return [hwb[0], c * 100, g * 100];
+};
+
+convert.apple.rgb = function (apple) {
+	return [(apple[0] / 65535) * 255, (apple[1] / 65535) * 255, (apple[2] / 65535) * 255];
+};
+
+convert.rgb.apple = function (rgb) {
+	return [(rgb[0] / 255) * 65535, (rgb[1] / 255) * 65535, (rgb[2] / 255) * 65535];
+};
+
+convert.gray.rgb = function (args) {
+	return [args[0] / 100 * 255, args[0] / 100 * 255, args[0] / 100 * 255];
+};
+
+convert.gray.hsl = function (args) {
+	return [0, 0, args[0]];
+};
+
+convert.gray.hsv = convert.gray.hsl;
+
+convert.gray.hwb = function (gray) {
+	return [0, 100, gray[0]];
+};
+
+convert.gray.cmyk = function (gray) {
+	return [0, 0, 0, gray[0]];
+};
+
+convert.gray.lab = function (gray) {
+	return [gray[0], 0, 0];
+};
+
+convert.gray.hex = function (gray) {
+	const val = Math.round(gray[0] / 100 * 255) & 0xFF;
+	const integer = (val << 16) + (val << 8) + val;
+
+	const string = integer.toString(16).toUpperCase();
+	return '000000'.substring(string.length) + string;
+};
+
+convert.rgb.gray = function (rgb) {
+	const val = (rgb[0] + rgb[1] + rgb[2]) / 3;
+	return [val / 255 * 100];
+};
+
+
+/***/ }),
+
+/***/ 4185:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const conversions = __nccwpck_require__(6872);
+const route = __nccwpck_require__(4200);
+
+const convert = {};
+
+const models = Object.keys(conversions);
+
+function wrapRaw(fn) {
+	const wrappedFn = function (...args) {
+		const arg0 = args[0];
+		if (arg0 === undefined || arg0 === null) {
+			return arg0;
+		}
+
+		if (arg0.length > 1) {
+			args = arg0;
+		}
+
+		return fn(args);
+	};
+
+	// Preserve .conversion property if there is one
+	if ('conversion' in fn) {
+		wrappedFn.conversion = fn.conversion;
+	}
+
+	return wrappedFn;
+}
+
+function wrapRounded(fn) {
+	const wrappedFn = function (...args) {
+		const arg0 = args[0];
+
+		if (arg0 === undefined || arg0 === null) {
+			return arg0;
+		}
+
+		if (arg0.length > 1) {
+			args = arg0;
+		}
+
+		const result = fn(args);
+
+		// We're assuming the result is an array here.
+		// see notice in conversions.js; don't use box types
+		// in conversion functions.
+		if (typeof result === 'object') {
+			for (let len = result.length, i = 0; i < len; i++) {
+				result[i] = Math.round(result[i]);
+			}
+		}
+
+		return result;
+	};
+
+	// Preserve .conversion property if there is one
+	if ('conversion' in fn) {
+		wrappedFn.conversion = fn.conversion;
+	}
+
+	return wrappedFn;
+}
+
+models.forEach(fromModel => {
+	convert[fromModel] = {};
+
+	Object.defineProperty(convert[fromModel], 'channels', {value: conversions[fromModel].channels});
+	Object.defineProperty(convert[fromModel], 'labels', {value: conversions[fromModel].labels});
+
+	const routes = route(fromModel);
+	const routeModels = Object.keys(routes);
+
+	routeModels.forEach(toModel => {
+		const fn = routes[toModel];
+
+		convert[fromModel][toModel] = wrapRounded(fn);
+		convert[fromModel][toModel].raw = wrapRaw(fn);
+	});
+});
+
+module.exports = convert;
+
+
+/***/ }),
+
+/***/ 4200:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const conversions = __nccwpck_require__(6872);
+
+/*
+	This function routes a model to all other models.
+
+	all functions that are routed have a property `.conversion` attached
+	to the returned synthetic function. This property is an array
+	of strings, each with the steps in between the 'from' and 'to'
+	color models (inclusive).
+
+	conversions that are not possible simply are not included.
+*/
+
+function buildGraph() {
+	const graph = {};
+	// https://jsperf.com/object-keys-vs-for-in-with-closure/3
+	const models = Object.keys(conversions);
+
+	for (let len = models.length, i = 0; i < len; i++) {
+		graph[models[i]] = {
+			// http://jsperf.com/1-vs-infinity
+			// micro-opt, but this is simple.
+			distance: -1,
+			parent: null
+		};
+	}
+
+	return graph;
+}
+
+// https://en.wikipedia.org/wiki/Breadth-first_search
+function deriveBFS(fromModel) {
+	const graph = buildGraph();
+	const queue = [fromModel]; // Unshift -> queue -> pop
+
+	graph[fromModel].distance = 0;
+
+	while (queue.length) {
+		const current = queue.pop();
+		const adjacents = Object.keys(conversions[current]);
+
+		for (let len = adjacents.length, i = 0; i < len; i++) {
+			const adjacent = adjacents[i];
+			const node = graph[adjacent];
+
+			if (node.distance === -1) {
+				node.distance = graph[current].distance + 1;
+				node.parent = current;
+				queue.unshift(adjacent);
+			}
+		}
+	}
+
+	return graph;
+}
+
+function link(from, to) {
+	return function (args) {
+		return to(from(args));
+	};
+}
+
+function wrapConversion(toModel, graph) {
+	const path = [graph[toModel].parent, toModel];
+	let fn = conversions[graph[toModel].parent][toModel];
+
+	let cur = graph[toModel].parent;
+	while (graph[cur].parent) {
+		path.unshift(graph[cur].parent);
+		fn = link(conversions[graph[cur].parent][cur], fn);
+		cur = graph[cur].parent;
+	}
+
+	fn.conversion = path;
+	return fn;
+}
+
+module.exports = function (fromModel) {
+	const graph = deriveBFS(fromModel);
+	const conversion = {};
+
+	const models = Object.keys(graph);
+	for (let len = models.length, i = 0; i < len; i++) {
+		const toModel = models[i];
+		const node = graph[toModel];
+
+		if (node.parent === null) {
+			// No possible conversion, or this node is the source model.
+			continue;
+		}
+
+		conversion[toModel] = wrapConversion(toModel, graph);
+	}
+
+	return conversion;
+};
+
+
+
+/***/ }),
+
+/***/ 4953:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = {
+	"aliceblue": [240, 248, 255],
+	"antiquewhite": [250, 235, 215],
+	"aqua": [0, 255, 255],
+	"aquamarine": [127, 255, 212],
+	"azure": [240, 255, 255],
+	"beige": [245, 245, 220],
+	"bisque": [255, 228, 196],
+	"black": [0, 0, 0],
+	"blanchedalmond": [255, 235, 205],
+	"blue": [0, 0, 255],
+	"blueviolet": [138, 43, 226],
+	"brown": [165, 42, 42],
+	"burlywood": [222, 184, 135],
+	"cadetblue": [95, 158, 160],
+	"chartreuse": [127, 255, 0],
+	"chocolate": [210, 105, 30],
+	"coral": [255, 127, 80],
+	"cornflowerblue": [100, 149, 237],
+	"cornsilk": [255, 248, 220],
+	"crimson": [220, 20, 60],
+	"cyan": [0, 255, 255],
+	"darkblue": [0, 0, 139],
+	"darkcyan": [0, 139, 139],
+	"darkgoldenrod": [184, 134, 11],
+	"darkgray": [169, 169, 169],
+	"darkgreen": [0, 100, 0],
+	"darkgrey": [169, 169, 169],
+	"darkkhaki": [189, 183, 107],
+	"darkmagenta": [139, 0, 139],
+	"darkolivegreen": [85, 107, 47],
+	"darkorange": [255, 140, 0],
+	"darkorchid": [153, 50, 204],
+	"darkred": [139, 0, 0],
+	"darksalmon": [233, 150, 122],
+	"darkseagreen": [143, 188, 143],
+	"darkslateblue": [72, 61, 139],
+	"darkslategray": [47, 79, 79],
+	"darkslategrey": [47, 79, 79],
+	"darkturquoise": [0, 206, 209],
+	"darkviolet": [148, 0, 211],
+	"deeppink": [255, 20, 147],
+	"deepskyblue": [0, 191, 255],
+	"dimgray": [105, 105, 105],
+	"dimgrey": [105, 105, 105],
+	"dodgerblue": [30, 144, 255],
+	"firebrick": [178, 34, 34],
+	"floralwhite": [255, 250, 240],
+	"forestgreen": [34, 139, 34],
+	"fuchsia": [255, 0, 255],
+	"gainsboro": [220, 220, 220],
+	"ghostwhite": [248, 248, 255],
+	"gold": [255, 215, 0],
+	"goldenrod": [218, 165, 32],
+	"gray": [128, 128, 128],
+	"green": [0, 128, 0],
+	"greenyellow": [173, 255, 47],
+	"grey": [128, 128, 128],
+	"honeydew": [240, 255, 240],
+	"hotpink": [255, 105, 180],
+	"indianred": [205, 92, 92],
+	"indigo": [75, 0, 130],
+	"ivory": [255, 255, 240],
+	"khaki": [240, 230, 140],
+	"lavender": [230, 230, 250],
+	"lavenderblush": [255, 240, 245],
+	"lawngreen": [124, 252, 0],
+	"lemonchiffon": [255, 250, 205],
+	"lightblue": [173, 216, 230],
+	"lightcoral": [240, 128, 128],
+	"lightcyan": [224, 255, 255],
+	"lightgoldenrodyellow": [250, 250, 210],
+	"lightgray": [211, 211, 211],
+	"lightgreen": [144, 238, 144],
+	"lightgrey": [211, 211, 211],
+	"lightpink": [255, 182, 193],
+	"lightsalmon": [255, 160, 122],
+	"lightseagreen": [32, 178, 170],
+	"lightskyblue": [135, 206, 250],
+	"lightslategray": [119, 136, 153],
+	"lightslategrey": [119, 136, 153],
+	"lightsteelblue": [176, 196, 222],
+	"lightyellow": [255, 255, 224],
+	"lime": [0, 255, 0],
+	"limegreen": [50, 205, 50],
+	"linen": [250, 240, 230],
+	"magenta": [255, 0, 255],
+	"maroon": [128, 0, 0],
+	"mediumaquamarine": [102, 205, 170],
+	"mediumblue": [0, 0, 205],
+	"mediumorchid": [186, 85, 211],
+	"mediumpurple": [147, 112, 219],
+	"mediumseagreen": [60, 179, 113],
+	"mediumslateblue": [123, 104, 238],
+	"mediumspringgreen": [0, 250, 154],
+	"mediumturquoise": [72, 209, 204],
+	"mediumvioletred": [199, 21, 133],
+	"midnightblue": [25, 25, 112],
+	"mintcream": [245, 255, 250],
+	"mistyrose": [255, 228, 225],
+	"moccasin": [255, 228, 181],
+	"navajowhite": [255, 222, 173],
+	"navy": [0, 0, 128],
+	"oldlace": [253, 245, 230],
+	"olive": [128, 128, 0],
+	"olivedrab": [107, 142, 35],
+	"orange": [255, 165, 0],
+	"orangered": [255, 69, 0],
+	"orchid": [218, 112, 214],
+	"palegoldenrod": [238, 232, 170],
+	"palegreen": [152, 251, 152],
+	"paleturquoise": [175, 238, 238],
+	"palevioletred": [219, 112, 147],
+	"papayawhip": [255, 239, 213],
+	"peachpuff": [255, 218, 185],
+	"peru": [205, 133, 63],
+	"pink": [255, 192, 203],
+	"plum": [221, 160, 221],
+	"powderblue": [176, 224, 230],
+	"purple": [128, 0, 128],
+	"rebeccapurple": [102, 51, 153],
+	"red": [255, 0, 0],
+	"rosybrown": [188, 143, 143],
+	"royalblue": [65, 105, 225],
+	"saddlebrown": [139, 69, 19],
+	"salmon": [250, 128, 114],
+	"sandybrown": [244, 164, 96],
+	"seagreen": [46, 139, 87],
+	"seashell": [255, 245, 238],
+	"sienna": [160, 82, 45],
+	"silver": [192, 192, 192],
+	"skyblue": [135, 206, 235],
+	"slateblue": [106, 90, 205],
+	"slategray": [112, 128, 144],
+	"slategrey": [112, 128, 144],
+	"snow": [255, 250, 250],
+	"springgreen": [0, 255, 127],
+	"steelblue": [70, 130, 180],
+	"tan": [210, 180, 140],
+	"teal": [0, 128, 128],
+	"thistle": [216, 191, 216],
+	"tomato": [255, 99, 71],
+	"turquoise": [64, 224, 208],
+	"violet": [238, 130, 238],
+	"wheat": [245, 222, 179],
+	"white": [255, 255, 255],
+	"whitesmoke": [245, 245, 245],
+	"yellow": [255, 255, 0],
+	"yellowgreen": [154, 205, 50]
+};
+
+
+/***/ }),
+
+/***/ 3813:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = (flag, argv = process.argv) => {
+	const prefix = flag.startsWith('-') ? '' : (flag.length === 1 ? '-' : '--');
+	const position = argv.indexOf(prefix + flag);
+	const terminatorPosition = argv.indexOf('--');
+	return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+};
+
+
+/***/ }),
+
+/***/ 1450:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const os = __nccwpck_require__(857);
+const tty = __nccwpck_require__(2018);
+const hasFlag = __nccwpck_require__(3813);
+
+const {env} = process;
+
+let forceColor;
+if (hasFlag('no-color') ||
+	hasFlag('no-colors') ||
+	hasFlag('color=false') ||
+	hasFlag('color=never')) {
+	forceColor = 0;
+} else if (hasFlag('color') ||
+	hasFlag('colors') ||
+	hasFlag('color=true') ||
+	hasFlag('color=always')) {
+	forceColor = 1;
+}
+
+if ('FORCE_COLOR' in env) {
+	if (env.FORCE_COLOR === 'true') {
+		forceColor = 1;
+	} else if (env.FORCE_COLOR === 'false') {
+		forceColor = 0;
+	} else {
+		forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+	}
+}
+
+function translateLevel(level) {
+	if (level === 0) {
+		return false;
+	}
+
+	return {
+		level,
+		hasBasic: true,
+		has256: level >= 2,
+		has16m: level >= 3
+	};
+}
+
+function supportsColor(haveStream, streamIsTTY) {
+	if (forceColor === 0) {
+		return 0;
+	}
+
+	if (hasFlag('color=16m') ||
+		hasFlag('color=full') ||
+		hasFlag('color=truecolor')) {
+		return 3;
+	}
+
+	if (hasFlag('color=256')) {
+		return 2;
+	}
+
+	if (haveStream && !streamIsTTY && forceColor === undefined) {
+		return 0;
+	}
+
+	const min = forceColor || 0;
+
+	if (env.TERM === 'dumb') {
+		return min;
+	}
+
+	if (process.platform === 'win32') {
+		// Windows 10 build 10586 is the first Windows release that supports 256 colors.
+		// Windows 10 build 14931 is the first release that supports 16m/TrueColor.
+		const osRelease = os.release().split('.');
+		if (
+			Number(osRelease[0]) >= 10 &&
+			Number(osRelease[2]) >= 10586
+		) {
+			return Number(osRelease[2]) >= 14931 ? 3 : 2;
+		}
+
+		return 1;
+	}
+
+	if ('CI' in env) {
+		if (['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI', 'GITHUB_ACTIONS', 'BUILDKITE'].some(sign => sign in env) || env.CI_NAME === 'codeship') {
+			return 1;
+		}
+
+		return min;
+	}
+
+	if ('TEAMCITY_VERSION' in env) {
+		return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+	}
+
+	if (env.COLORTERM === 'truecolor') {
+		return 3;
+	}
+
+	if ('TERM_PROGRAM' in env) {
+		const version = parseInt((env.TERM_PROGRAM_VERSION || '').split('.')[0], 10);
+
+		switch (env.TERM_PROGRAM) {
+			case 'iTerm.app':
+				return version >= 3 ? 3 : 2;
+			case 'Apple_Terminal':
+				return 2;
+			// No default
+		}
+	}
+
+	if (/-256(color)?$/i.test(env.TERM)) {
+		return 2;
+	}
+
+	if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+		return 1;
+	}
+
+	if ('COLORTERM' in env) {
+		return 1;
+	}
+
+	return min;
+}
+
+function getSupportLevel(stream) {
+	const level = supportsColor(stream, stream && stream.isTTY);
+	return translateLevel(level);
+}
+
+module.exports = {
+	supportsColor: getSupportLevel,
+	stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+	stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+};
+
+
+/***/ }),
+
 /***/ 770:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -25676,14 +33100,51 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.run = run;
 const core = __importStar(__nccwpck_require__(7484));
+const client_core_1 = __nccwpck_require__(1483);
+const client_services_1 = __nccwpck_require__(6404);
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+async function reviewCode(gitHubUrl) {
+    core.info('Setting up Code Reviewer');
+    const ctx = new client_core_1.Context();
+    let reviewer = await (0, client_services_1.getEyevinnAiCodeReviewerInstance)(ctx, 'ghaction');
+    if (!reviewer) {
+        reviewer = await (0, client_services_1.createEyevinnAiCodeReviewerInstance)(ctx, {
+            name: 'ghaction',
+            OpenAiApiKey: '{{secrets.openaikey}}'
+        });
+        await delay(1000);
+    }
+    core.info(`Reviewer available, requesting review of ${gitHubUrl.toString()}`);
+    const reviewRequestUrl = new URL('/api/v1/review', reviewer.url);
+    core.debug(reviewRequestUrl.toString());
+    const sat = await ctx.getServiceAccessToken('eyevinn-ai-code-reviewer');
+    const response = await fetch(reviewRequestUrl, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${sat}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            githubUrl: gitHubUrl.toString()
+        })
+    });
+    if (response.ok) {
+        const review = await response.json();
+        return review;
+    }
+    else {
+        throw new Error('Failed to get review');
+    }
+}
 /**
  * This file is the actual logic of the action
  * @returns {Promise<void>} Resolves when the action is complete
  */
 async function run() {
     try {
-        const repoUrl = core.getInput('repo-url', { required: true });
-        core.info(`Reviewing ${repoUrl}`);
+        const repoUrl = core.getInput('repo_url', { required: true });
+        const response = await reviewCode(new URL(repoUrl));
+        core.setOutput('score', response.review.scoring_criteria.overall_score);
     }
     catch (error) {
         core.setFailed(error.message);
@@ -25890,6 +33351,14 @@ module.exports = require("timers");
 
 "use strict";
 module.exports = require("tls");
+
+/***/ }),
+
+/***/ 2018:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("tty");
 
 /***/ }),
 
@@ -27572,8 +35041,8 @@ module.exports = parseParams
 /******/ 		}
 /******/ 		// Create a new module (and put it into the cache)
 /******/ 		var module = __webpack_module_cache__[moduleId] = {
-/******/ 			// no module.id needed
-/******/ 			// no module.loaded needed
+/******/ 			id: moduleId,
+/******/ 			loaded: false,
 /******/ 			exports: {}
 /******/ 		};
 /******/ 	
@@ -27586,11 +35055,23 @@ module.exports = parseParams
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
 /******/ 	
+/******/ 		// Flag the module as loaded
+/******/ 		module.loaded = true;
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
 /******/ 	
 /************************************************************************/
+/******/ 	/* webpack/runtime/node module decorator */
+/******/ 	(() => {
+/******/ 		__nccwpck_require__.nmd = (module) => {
+/******/ 			module.paths = [];
+/******/ 			if (!module.children) module.children = [];
+/******/ 			return module;
+/******/ 		};
+/******/ 	})();
+/******/ 	
 /******/ 	/* webpack/runtime/compat */
 /******/ 	
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
