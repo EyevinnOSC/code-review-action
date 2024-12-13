@@ -9,7 +9,7 @@ branding:
 
 # Define your inputs here.
 inputs:
-  repo-url:
+  repo_url:
     description: 'GitHub repository URL'
     required: true
 
