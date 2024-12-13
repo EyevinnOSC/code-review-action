@@ -50,10 +50,7 @@ export async function run(): Promise<void> {
     const response = await reviewCode(new URL(repoUrl));
     core.debug(response.review);
     core.setOutput('score', response.review.scoring_criteria.overall_score);
-    core.setOutput(
-      'suggestions',
-      response.review.suggestions_for_improvement.join('\n')
-    );
+    core.setOutput('suggestions', response.review.suggestions_for_improvement);
   } catch (error: any) {
     core.setFailed(error.message);
   }
