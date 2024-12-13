@@ -1,0 +1,40 @@
+{
+  "name": "code-review-action",
+  "version": "0.1.0",
+  "description": "GitHub action based on AI Code Reviewer in Eyevinn OSC for code review",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint .",
+    "pretty": "prettier --check --ignore-unknown .",
+    "pretty:write": "prettier --write --ignore-unknown .",
+    "local-action": "local-action . src/main.ts .env",
+    "package": "ncc build src/index.ts -o dist --source-map --license LICENSE",
+    "all": "npm run lint && npm run pretty && npm run package"
+  },
+  "author": "Eyevinn Open Source Cloud <osc@eyevinn.se>",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@osaas/client-core": "^0.15.0",
+    "@osaas/client-services": "^0.4.0",
+    "ts-node": "^10.9.2"
+  },
+  "devDependencies": {
+    "@github/local-action": "^2.2.1",
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^5.51.0",
+    "@typescript-eslint/parser": "^5.51.0",
+    "@vercel/ncc": "^0.38.3",
+    "eslint": "^8.33.0",
+    "eslint-config-prettier": "^8.6.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.8.4",
+    "typescript": "^5.7.2"
+  }
+}

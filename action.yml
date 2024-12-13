@@ -1,0 +1,23 @@
+name: 'AI Code Reviewer'
+description: 'Based on open web service in Eyevinn OSC perform a code review of a GitHub repo'
+author: 'Eyevinn Open Source Cloud'
+
+# Add your action's branding here. This will appear on the GitHub Marketplace.
+branding:
+  icon: cloud
+  color: blue
+
+# Define your inputs here.
+inputs:
+  repo-url:
+    description: 'GitHub repository URL'
+    required: true
+
+# Define your outputs here.
+outputs:
+  score:
+    description: 'Overall score (1-100 where 100 is best)'
+
+runs:
+  using: node20
+  main: dist/index.js
