@@ -31,9 +31,8 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: 'Code review score: ${{ steps.review.outputs.score }}'
+              body: 'Code review score: ${{ steps.review.outputs.score }}\n${{ steps.review.outputs.suggestions }}'
             })
-
 ```
 
 ## Development
