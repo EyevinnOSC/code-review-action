@@ -33146,7 +33146,7 @@ async function run() {
         const response = await reviewCode(new URL(repoUrl));
         core.debug(response.review);
         core.setOutput('score', response.review.scoring_criteria.overall_score);
-        core.setOutput('suggestions', response.review.suggestions_for_improvement);
+        core.setOutput('suggestions', response.review.suggestions_for_improvement.join('\n'));
     }
     catch (error) {
         core.setFailed(error.message);
