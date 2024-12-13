@@ -15,23 +15,23 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-    - name: review
-      uses: EyevinnOSC/code-review-action@v1
-      with:
-        repo_url: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name}}
-      env:
-        OSC_ACCESS_TOKEN: ${{ secrets.OSC_ACCESS_TOKEN }}
-    - name: comment
-      uses: actions/github-script@v7
-      with:
-        github-token: ${{secrets.GITHUB_TOKEN}}
-        script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: 'Code review score: ${{ steps.review.outputs.score }}'
-          }) 
+      - name: review
+        uses: EyevinnOSC/code-review-action@v1
+        with:
+          repo_url: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name}}
+        env:
+          OSC_ACCESS_TOKEN: ${{ secrets.OSC_ACCESS_TOKEN }}
+      - name: comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: 'Code review score: ${{ steps.review.outputs.score }}'
+            })
 ```
 
 ## Development
