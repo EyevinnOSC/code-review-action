@@ -48,7 +48,9 @@ export async function run(): Promise<void> {
   try {
     const repoUrl = core.getInput('repo_url', { required: true });
     const response = await reviewCode(new URL(repoUrl));
+    core.debug(response.review);
     core.setOutput('score', response.review.scoring_criteria.overall_score);
+    core.setOutput('suggestions', response.review.suggestions_for_improvement);
   } catch (error: any) {
     core.setFailed(error.message);
   }

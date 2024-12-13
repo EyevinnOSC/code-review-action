@@ -17,6 +17,8 @@ inputs:
 outputs:
   score:
     description: 'Overall score (1-100 where 100 is best)'
+  suggestions:
+    description: 'Suggestions for improvement'
 
 runs:
   using: node20
